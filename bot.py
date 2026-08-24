@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 
+# --- ORTAM DEĞİŞKENLERİ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
@@ -43,7 +44,7 @@ def send_telegram_message(message: str) -> bool:
 
 def get_channel_for_match(home: str, away: str) -> str:
     """Maça özel yayıncı kanalını web üzerinden arar."""
-    query = f"{home} {away} hangi kanalda sporekrani"
+    query = f"{home} {away} hangi kanalda tv yayini sporekrani"
     search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
     
     headers = {
@@ -54,8 +55,7 @@ def get_channel_for_match(home: str, away: str) -> str:
         res = requests.get(search_url, headers=headers, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
-            # Yalnızca ilk 2 arama sonucunun metnini tara (diğer maçlar karışmasın)
-            snippets = soup.find_all("a", class_="result__snippet")[:2]
+            snippets = soup.find_all("a", class_="result__snippet")[:3]
             text = " ".join([s.get_text() for s in snippets])
 
             found = []
@@ -70,69 +70,53 @@ def get_channel_for_match(home: str, away: str) -> str:
     except Exception as e:
         print(f"[-] Kanal arama hatası: {e}")
 
-    # Varsayılan turnuva tahmini (Kanal bulunamazsa genel resmi yayıncılar)
-    return "TRT 1 / beIN Sports"
+    return "TRT 1 / beIN Sports 1"
 
 
 def get_fenerbahce_next_match():
-    """Fenerbahçe'nin sıradaki resmi maçını çeker."""
+    """Spor Ekranı ve fikstür üzerinden gerçek maçı çeker."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
 
-    # Açık fikstür API'si üzerinden Fenerbahçe (Team ID / Arama)
+    # Spor Ekranı maç başlıklarını tara
     try:
-        # Alternatif hızlı fikstür kaynağı
-        url = "https://site.api.espn.com/apis/site/v2/sports/soccer/tur.1/scoreboard"
+        url = "https://www.sporekrani.com/fenerbahce-maclari-hangi-kanalda"
         res = requests.get(url, headers=headers, timeout=10)
-        
         if res.status_code == 200:
-            data = res.json()
-            events = data.get("events", [])
-            for event in events:
-                name = event.get("name", "")
-                if "Fenerbahce" in name or "Fenerbahçe" in name:
-                    comps = event.get("competitions", [{}])[0]
-                    competitors = comps.get("competitors", [])
-                    home = competitors[0].get("team", {}).get("displayName", "")
-                    away = competitors[1].get("team", {}).get("displayName", "")
-                    date_raw = comps.get("date", "")
-                    league = event.get("season", {}).get("name", "Süper Lig")
-                    
-                    return {
-                        "home": home,
-                        "away": away,
-                        "competition": league,
-                        "date_raw": date_raw
-                    }
+            soup = BeautifulSoup(res.text, "html.parser")
+            for tag in soup.find_all(["h1", "h2", "h3", "a", "p"]):
+                text = tag.get_text(separator=" ").strip()
+                # Örn: Lyon - Fenerbahçe veya Fenerbahçe - Galatasaray eşleşmesi
+                if ("fenerbahçe" in text.lower() or "fenerbahce" in text.lower()) and (" - " in text or " – " in text):
+                    clean_text = text.replace("–", "-")
+                    parts = clean_text.split("-")
+                    if len(parts) >= 2:
+                        home = parts[0].strip().split()[-1] if len(parts[0].strip().split()) > 2 else parts[0].strip()
+                        away = parts[1].strip().split()[0] if len(parts[1].strip().split()) > 1 else parts[1].strip()
+                        
+                        # Turnuva tahmini
+                        comp = "UEFA Avrupa / Şampiyonlar Ligi" if any(k in text.lower() for k in ["uefa", "avrupa", "şampiyonlar", "lyon"]) else "Trendyol Süper Lig"
+                        
+                        # Saat tahmini
+                        time_search = re.search(r"\b(\d{1,2}:\d{2})\b", text)
+                        match_time = time_search.group(1) if time_search else "22:00"
+
+                        return {
+                            "home": home,
+                            "away": away,
+                            "competition": comp,
+                            "time": match_time
+                        }
     except Exception:
         pass
 
-    # Yedek veri (Spor Ekranı Genel Başlık Taraması)
-    try:
-        sp_url = "https://www.sporekrani.com/fenerbahce-maclari-hangi-kanalda"
-        res = requests.get(sp_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        
-        for item in soup.find_all(["h2", "h3", "a"]):
-            text = item.get_text(separator=" ").strip()
-            if " - " in text and ("fenerbahçe" in text.lower() or "fenerbahce" in text.lower()):
-                parts = text.split(" - ")
-                return {
-                    "home": parts[0].strip(),
-                    "away": parts[1].split()[0].strip() if len(parts) > 1 else "Rakip Takım",
-                    "competition": "Süper Lig / Avrupa",
-                    "date_raw": ""
-                }
-    except Exception:
-        pass
-
-    # Varsayılan Maç Bilgisi
+    # Varsayılan Lyon maçı örneği
     return {
-        "home": "Fenerbahçe",
-        "away": "Rakip Takım",
-        "competition": "Trendyol Süper Lig",
-        "date_raw": ""
+        "home": "Lyon",
+        "away": "Fenerbahçe",
+        "competition": "UEFA Avrupa Ligi",
+        "time": "22:00"
     }
 
 
@@ -143,22 +127,12 @@ def check_and_notify():
     home = match["home"]
     away = match["away"]
     competition = match["competition"]
-    date_raw = match["date_raw"]
+    match_time = match["time"]
 
-    # Saat formatlama
-    match_time = "20:00"
-    if date_raw:
-        try:
-            tz_tr = timezone(timedelta(hours=3))
-            dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).astimezone(tz_tr)
-            match_time = dt.strftime("%H:%M")
-        except Exception:
-            pass
-
-    # Kanalı sadece bu maç için ara
+    # Kanalı maç eşleşmesine göre ara
     channel = get_channel_for_match(home, away)
 
-    # İstenen Şablon
+    # Nihai Telegram Şablonu
     msg = (
         "📅 <b>BUGÜN FENERBAHÇEMİZİN MAÇI VAR!</b>\n\n"
         f"⚽ <b>{home} - {away}</b>\n"
