@@ -120,4 +120,10 @@ def main():
             )
 
 if __name__ == "__main__":
+    print("Bot çalıştı:", datetime.now(ISTANBUL))
+    
+    # ===== TEST BİLDİRİMİ (geçici) =====
+    send("✅ GitHub Actions test bildirimi geldi! Bot çalışıyor.")
+    # ==================================
+    
     main()
