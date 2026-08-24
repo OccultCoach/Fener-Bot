@@ -2,24 +2,21 @@ name: Fenerbahçe Bot
 
 on:
   schedule:
-    - cron: '0 10 * * *'
-    - cron: '*/20 * * * *'
-  workflow_dispatch:
+    # Her gün Türkiye saatiyle 09:30'da (UTC 06:30) tek bir kontrol yapar
+    - cron: '30 6 * * *'
+  workflow_dispatch: # İstediğiniz an manuel test edebilmeniz için
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install
         run: pip install -r requirements.txt
-
       - name: Run bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
