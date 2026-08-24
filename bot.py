@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import pytz
 from bs4 import BeautifulSoup
 
-TELEGRAM_TOKEN = os.environ.get("8707340964:AAFZWO2BVcZpTEidN6-58gbNgvycFQ-1KtU")
-CHAT_ID = os.environ.get("1123803139")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
 URL = "https://www.sporekrani.com/home/team/fenerbahce"
 ISTANBUL = pytz.timezone("Europe/Istanbul")
@@ -23,6 +23,56 @@ def send(text):
             print(r.text)
     except Exception as e:
         print("Telegram hatası:", repr(e))
+
+def get_channel(match_url):
+    """Maç detay sayfasından yayın kanalını çekmeye çalışır."""
+    if not match_url:
+        return ""
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9"
+    }
+
+    try:
+        r = requests.get(match_url, headers=headers, timeout=20)
+        if r.status_code != 200:
+            print("Maç detay sayfası:", r.status_code)
+            return ""
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        text = soup.get_text(" ", strip=True)
+
+        # Spor Ekranı sayfasındaki yaygın kanal ifadelerini yakala.
+        import re
+        patterns = [
+            r"(?:hangi kanalda|yayın|tv|kanal)\s*[:\-]?\s*([A-Za-zÇĞİÖŞÜçğıöşü0-9+ .&\-]+)",
+        ]
+
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                channel = m.group(1).strip(" -:|")
+                # Çok uzun/yanlış eşleşmeleri ele.
+                if 1 <= len(channel) <= 60:
+                    return channel
+
+        # Sayfada kanal adı açıkça class/id içinde bulunuyorsa metinsel arama yap.
+        keywords = [
+            "TRT 1", "TRT Spor", "beIN SPORTS", "beIN Sports",
+            "S Sport", "S Sport Plus", "Tivibu Spor", "A Spor",
+            "ATV", "Exxen", "Tabii", "DAZN", "CBC Sport"
+        ]
+        for keyword in keywords:
+            if keyword.lower() in text.lower():
+                return keyword
+
+    except Exception as e:
+        print("Kanal bilgisi alınamadı:", repr(e))
+
+    return ""
+
 
 def get_matches():
     headers = {
@@ -70,12 +120,18 @@ def get_matches():
             competition = obj.get("organizer", {}).get("name", "") if isinstance(obj.get("organizer"), dict) else ""
 
             event_id = obj.get("@id") or f"{kick.strftime('%Y%m%d%H%M')}_{home}_{away}"
+
+            # SportsEvent içindeki URL varsa maç detay sayfasını kullan.
+            match_url = obj.get("url", "")
+            channel = get_channel(match_url)
+
             matches.append({
                 "id": event_id,
                 "home": home,
                 "away": away,
                 "competition": competition,
-                "kick": kick
+                "kick": kick,
+                "channel": channel
             })
 
     matches.sort(key=lambda x: x["kick"])
@@ -99,6 +155,7 @@ def main():
                 f"📅 <b>BUGÜN FENERBAHÇE MAÇI VAR!</b>\n\n"
                 f"⚽ {m['home']} - {m['away']}\n"
                 f"🏆 {m['competition']}\n"
+                f"📺 Kanal: {m.get('channel') or 'Kanal bilgisi bulunamadı'}\n"
                 f"⏰ Saat: {kick.strftime('%H:%M')}"
             )
 
@@ -108,6 +165,7 @@ def main():
                 f"🔔 <b>FENERBAHÇE MAÇINA 30 DAKİKA KALDI!</b>\n\n"
                 f"⚽ {m['home']} - {m['away']}\n"
                 f"🏆 {m['competition']}\n"
+                f"📺 Kanal: {m.get('channel') or 'Kanal bilgisi bulunamadı'}\n"
                 f"🕐 {kick.strftime('%H:%M')}"
             )
 
@@ -116,7 +174,8 @@ def main():
             send(
                 f"🟢 <b>FENERBAHÇE MAÇI BAŞLADI!</b>\n\n"
                 f"⚽ {m['home']} - {m['away']}\n"
-                f"🏆 {m['competition']}"
+                f"🏆 {m['competition']}\n"
+                f"📺 Kanal: {m.get('channel') or 'Kanal bilgisi bulunamadı'}"
             )
 
 if __name__ == "__main__":
