@@ -5,14 +5,12 @@ import requests
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 
-# --- ORTAM DEĞİŞKENLERİ (GitHub Secrets) ---
+# --- ORTAM DEĞİŞKENLERİ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# Spor Ekranı Fenerbahçe Sayfası
 SPOR_EKRANI_FB_URL = "https://www.sporekrani.com/fenerbahce-maclari-hangi-kanalda"
 
-# Tanımlı Türk ve Popüler Spor Kanalları
 KNOWN_CHANNELS = [
     "TRT 1", "TRT Spor", "TRT Spor Yıldız", "TRT Tabii", "Tabii",
     "beIN Sports 1", "beIN Sports 2", "beIN Sports 3", "beIN Sports 4", "beIN Sports Haber", "beIN SPORTS",
@@ -25,7 +23,6 @@ KNOWN_CHANNELS = [
 
 
 def send_telegram_message(message: str) -> bool:
-    """Telegram API üzerinden mesaj gönderir."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("[-] Hata: TELEGRAM_TOKEN veya CHAT_ID ortam değişkenleri tanımlı değil.")
         return False
@@ -49,15 +46,11 @@ def send_telegram_message(message: str) -> bool:
 
 
 def get_match_channels(detail_url: str) -> str:
-    """Maç detay sayfasına bağlanarak yayıncı kanal bilgilerini çıkarır."""
     if not detail_url:
         return "Bilinmiyor"
 
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     try:
@@ -72,23 +65,18 @@ def get_match_channels(detail_url: str) -> str:
         for ch in KNOWN_CHANNELS:
             pattern = rf"\b{re.escape(ch)}\b"
             if re.search(pattern, page_text, re.IGNORECASE):
-                # Çift kayıt oluşmasını önle (örn: beIN Sports 1 bulunduysa beIN SPORTS ekleme)
                 if not any(ch.lower() in item.lower() for item in found):
                     found.append(ch)
 
         return ", ".join(found) if found else "Bilinmiyor"
     except Exception as e:
-        print(f"[-] Kanal bilgisi çekilirken hata: {e}")
+        print(f"[-] Kanal hatası: {e}")
         return "Bilinmiyor"
 
 
 def fetch_matches():
-    """Spor Ekranı üzerinden maçları çeker ve JSON-LD verilerini ayıklar."""
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     try:
@@ -101,7 +89,6 @@ def fetch_matches():
     soup = BeautifulSoup(res.text, "html.parser")
     matches = []
 
-    # JSON-LD script etiketlerini tara
     scripts = soup.find_all("script", type="application/ld+json")
     for script in scripts:
         if not script.string:
@@ -134,17 +121,14 @@ def fetch_matches():
 
 
 def check_and_notify():
-    """Test amaçlı: Tarihe bakmaksızın listedeki ilk maçı gönderir."""
-    print("[*] Test modu aktif: İlk maç çekiliyor...")
+    print("[*] Test modu: İlk maç çekiliyor...")
 
     matches = fetch_matches()
     if not matches:
         print("[-] Herhangi bir maç verisi bulunamadı.")
         return
 
-    # Tarih filtresine bakmadan ilk maçı alıyoruz
     match = matches[0]
-
     print(f"[+] Maç bulundu: {match['home']} vs {match['away']}")
 
     detail_url = match.get("detail_url")
@@ -159,50 +143,6 @@ def check_and_notify():
     )
 
     send_telegram_message(msg)
-    """Günün maçını kontrol eder ve bildirimi gönderir."""
-    tz_tr = timezone(timedelta(hours=3))
-    now = datetime.now(tz_tr)
-    today_str = now.strftime("%Y-%m-%d")
-
-    print(f"[*] Kontrol ediliyor... Bugünün Tarihi (TR): {today_str}")
-
-    matches = fetch_matches()
-    if not matches:
-        print("[-] Herhangi bir maç verisi bulunamadı.")
-        return
-
-    for match in matches:
-        start_date_raw = match.get("start_date", "")
-        if today_str not in start_date_raw and not start_date_raw.startswith(today_str):
-            continue
-
-        # Saat bilgisini ayıkla
-        try:
-            dt = datetime.fromisoformat(start_date_raw.replace("Z", "+00:00"))
-            dt_tr = dt.astimezone(tz_tr)
-            match_time = dt_tr.strftime("%H:%M")
-        except Exception:
-            match_time = start_date_raw.split("T")[-1][:5] if "T" in start_date_raw else "Belirtilmemiş"
-
-        print(f"[+] Bugünkü maç bulundu: {match['home']} vs {match['away']}")
-
-        # Kanal bilgisini detay sayfasından al
-        detail_url = match.get("detail_url")
-        channel = get_match_channels(detail_url)
-
-        # Telegram Bildirim Mesajı
-        msg = (
-            "📅 <b>BUGÜN FENERBAHÇE MAÇI VAR!</b>\n\n"
-            f"⚽ <b>{match['home']} - {match['away']}</b>\n"
-            f"🏆 <i>{match['competition']}</i>\n"
-            f"📺 <b>Kanal:</b> {channel}\n"
-            f"⏰ <b>Saat:</b> {match_time} (TSİ)\n"
-        )
-
-        send_telegram_message(msg)
-        return
-
-    print("[-] Bugün oynanacak bir maç bulunamadı.")
 
 
 if __name__ == "__main__":
