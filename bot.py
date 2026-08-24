@@ -134,6 +134,31 @@ def fetch_matches():
 
 
 def check_and_notify():
+    """Test amaçlı: Tarihe bakmaksızın listedeki ilk maçı gönderir."""
+    print("[*] Test modu aktif: İlk maç çekiliyor...")
+
+    matches = fetch_matches()
+    if not matches:
+        print("[-] Herhangi bir maç verisi bulunamadı.")
+        return
+
+    # Tarih filtresine bakmadan ilk maçı alıyoruz
+    match = matches[0]
+
+    print(f"[+] Maç bulundu: {match['home']} vs {match['away']}")
+
+    detail_url = match.get("detail_url")
+    channel = get_match_channels(detail_url)
+
+    msg = (
+        "🧪 <b>TEST BİLDİRİMİ</b>\n\n"
+        f"⚽ <b>{match['home']} - {match['away']}</b>\n"
+        f"🏆 <i>{match['competition']}</i>\n"
+        f"📺 <b>Kanal:</b> {channel}\n"
+        f"📅 <b>Tarih:</b> {match.get('start_date', 'Bilinmiyor')}\n"
+    )
+
+    send_telegram_message(msg)
     """Günün maçını kontrol eder ve bildirimi gönderir."""
     tz_tr = timezone(timedelta(hours=3))
     now = datetime.now(tz_tr)
