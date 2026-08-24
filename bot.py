@@ -1,14 +1,16 @@
 import os
 import re
 import requests
+from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 
 # --- ORTAM DEĞİŞKENLERİ ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-SPOR_EKRANI_FB_URL = "https://www.sporekrani.com/fenerbahce-maclari-hangi-kanalda"
+SPOR_EKRANI_URL = "https://www.sporekrani.com/fenerbahce-maclari-hangi-kanalda"
 
+# Tanımlı Türk ve Popüler Spor Kanalları
 KNOWN_CHANNELS = [
     "TRT 1", "TRT Spor", "TRT Spor Yıldız", "TRT Tabii", "Tabii",
     "beIN Sports 1", "beIN Sports 2", "beIN Sports 3", "beIN Sports 4", "beIN Sports Haber", "beIN SPORTS",
@@ -22,7 +24,7 @@ KNOWN_CHANNELS = [
 
 def send_telegram_message(message: str) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[-] Hata: TELEGRAM_TOKEN veya CHAT_ID ortam değişkenleri tanımlı değil.")
+        print("[-] Hata: TELEGRAM_TOKEN veya CHAT_ID tanımlı değil.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -39,29 +41,44 @@ def send_telegram_message(message: str) -> bool:
         print("[+] Telegram bildirimi başarıyla gönderildi.")
         return True
     except Exception as e:
-        print(f"[-] Telegram mesajı gönderilemedi: {e}")
+        print(f"[-] Telegram hatası: {e}")
         return False
 
 
-def get_match_channels_from_text(text: str) -> str:
-    """Metin içindeki bilinen TV kanallarını bulur."""
+def extract_channels_from_element(soup_element) -> str:
+    """HTML bloğundaki metinleri ve kanal logosu img etiketlerini tarar."""
     found = []
+
+    # 1. Metin içeriği
+    text_content = soup_element.get_text(separator=" ")
+
+    # 2. img etiketlerindeki alt, title ve src alanları (Logo tarama)
+    images = soup_element.find_all("img")
+    for img in images:
+        alt = img.get("alt", "")
+        title = img.get("title", "")
+        src = img.get("src", "")
+        text_content += f" {alt} {title} {src} "
+
+    # Kanalları ara
     for ch in KNOWN_CHANNELS:
-        pattern = rf"\b{re.escape(ch)}\b"
-        if re.search(pattern, text, re.IGNORECASE):
-            if not any(ch.lower() in item.lower() for item in found):
-                found.append(ch)
+        # Regex ile büyük/küçük harf duyarsız arama
+        pattern = rf"(?:^|[^a-zA-Z0-9]){re.escape(ch)}(?:$|[^a-zA-Z0-9])"
+        if re.search(pattern, text_content, re.IGNORECASE):
+            clean_ch = ch.replace("Sports", "Sports").strip()
+            if not any(clean_ch.lower() in item.lower() for item in found):
+                found.append(clean_ch)
+
     return ", ".join(found) if found else "Bilinmiyor"
 
 
-def fetch_matches():
-    """Spor Ekranı HTML yapısını doğrudan tarar."""
+def fetch_fb_matches():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     try:
-        res = requests.get(SPOR_EKRANI_FB_URL, headers=headers, timeout=15)
+        res = requests.get(SPOR_EKRANI_URL, headers=headers, timeout=15)
         res.raise_for_status()
     except Exception as e:
         print(f"[-] Sayfa yüklenemedi: {e}")
@@ -70,56 +87,74 @@ def fetch_matches():
     soup = BeautifulSoup(res.text, "html.parser")
     matches = []
 
-    # Sayfadaki tüm bağlantıları ve maç bloklarını tara
-    cards = soup.find_all(["div", "tr", "li", "article"])
-    for card in cards:
-        text = card.get_text(separator=" ").strip()
-        if "fenerbahçe" in text.lower() or "fenerbahce" in text.lower():
-            # Maç satırında tarih ve rakip aranıyor
-            link = card.find("a", href=True)
-            href = link["href"] if link else ""
-            if href and not href.startswith("http"):
-                href = f"https://www.sporekrani.com{href}"
+    # Sayfadaki tüm olası maç kartlarını / satırlarını bul
+    rows = soup.find_all(["div", "li", "tr"])
 
-            channel = get_match_channels_from_text(text)
+    for row in rows:
+        row_text = row.get_text(separator=" ").strip()
+        
+        # Fenerbahçe maçı içeren satırları süz
+        if ("fenerbahçe" in row_text.lower() or "fenerbahce" in row_text.lower()) and len(row_text) < 400:
+            # Tarih ve saat formatı (örn: 20:00, 21:45 veya 15.01 / 2026 gibi)
+            time_match = re.search(r"\b(\d{1,2}:\d{2})\b", row_text)
+            date_match = re.search(r"\b(\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?)\b", row_text)
             
-            # Kart içinden anlamlı başlık çıkarımı
-            lines = [l.strip() for l in text.splitlines() if l.strip()]
-            if len(lines) >= 2:
-                matches.append({
-                    "raw_text": " | ".join(lines[:4]),
-                    "channel": channel,
-                    "url": href
-                })
+            # Kanal çıkarımı
+            channels = extract_channels_from_element(row)
+            
+            # Anlamlı satır başlığı
+            lines = [l.strip() for l in row_text.splitlines() if l.strip()]
+            title = " - ".join(lines[:2]) if lines else row_text[:80]
 
-    return matches
+            matches.append({
+                "title": title,
+                "time": time_match.group(1) if time_match else "Belirtilmemiş",
+                "date": date_match.group(1) if date_match else "Belirtilmemiş",
+                "channel": channels,
+                "raw_soup": row
+            })
+
+    # Tekrarlayan verileri temizle
+    unique_matches = []
+    seen = set()
+    for m in matches:
+        if m["title"] not in seen and len(m["title"]) > 10:
+            seen.add(m["title"])
+            unique_matches.append(m)
+
+    return unique_matches
 
 
 def check_and_notify():
-    print("[*] Test modu: HTML üzerinden maçlar taranıyor...")
+    print("[*] Fenerbahçe maçları taranıyor...")
 
-    matches = fetch_matches()
+    matches = fetch_fb_matches()
+    
     if not matches:
-        # Alternatif: Sayfanın saf metninde kanal tara
-        print("[-] Blok bulunamadı, genel sayfa metni kontrol ediliyor...")
-        res = requests.get(SPOR_EKRANI_FB_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        ch = get_match_channels_from_text(res.text)
-        
+        # Alternatif: Tüm sayfayı genel olarak tara
+        print("[-] Özel satır bulunamadı, tam sayfa kanalı taranıyor...")
+        res = requests.get(SPOR_EKRANI_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        soup = BeautifulSoup(res.text, "html.parser")
+        channel = extract_channels_from_element(soup)
+
         msg = (
-            "🧪 <b>TEST BİLDİRİMİ (Genel Tarama)</b>\n\n"
+            "🧪 <b>TEST BİLDİRİMİ (Fenerbahçe)</b>\n\n"
             "⚽ <b>Fenerbahçe Karşılaşması</b>\n"
-            f"📺 <b>Bulunan Kanallar:</b> {ch}\n"
-            "🔗 Spor Ekranı sayfası başarıyla okundu."
+            f"📺 <b>Kanal:</b> {channel}\n"
         )
         send_telegram_message(msg)
         return
 
-    # İlk bulunan veriyi gönder
+    # İlk sıradaki maçı gönder (Test)
     first = matches[0]
+    print(f"[+] İlk maç bulundu: {first['title']} - Kanal: {first['channel']}")
+
     msg = (
         "🧪 <b>TEST BİLDİRİMİ</b>\n\n"
-        f"📋 <b>Maç Bilgisi:</b> {first['raw_text']}\n"
+        f"⚽ <b>{first['title']}</b>\n"
         f"📺 <b>Kanal:</b> {first['channel']}\n"
+        f"⏰ <b>Saat:</b> {first['time']}\n"
+        f"📅 <b>Tarih:</b> {first['date']}\n"
     )
 
     send_telegram_message(msg)
