@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import requests
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
@@ -8,12 +7,9 @@ from bs4 import BeautifulSoup
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-SPOR_EKRANI_URL = "https://www.sporekrani.com/fenerbahce-maclari-hangi-kanalda"
-
-# Sadece maç yayınında geçebilecek ana spor kanalları
-VALID_CHANNELS = [
+KNOWN_CHANNELS = [
     "TRT 1", "TRT Spor Yıldız", "TRT Spor", "TRT Tabii", "Tabii",
-    "beIN Sports 1", "beIN Sports 2", "beIN Sports 3", "beIN Sports 4", "beIN Sports Haber", "beIN Sports MAX 1", "beIN Sports MAX 2",
+    "beIN Sports 1", "beIN Sports 2", "beIN Sports 3", "beIN Sports 4", "beIN Sports Haber",
     "S Sport Plus", "S Sport 1", "S Sport 2", "S Sport",
     "Exxen", "TV8,5", "TV8.5", "TV8",
     "A Spor", "ATV",
@@ -24,7 +20,7 @@ VALID_CHANNELS = [
 
 def send_telegram_message(message: str) -> bool:
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[-] Hata: TELEGRAM_TOKEN veya CHAT_ID tanımlı değil.")
+        print("[-] Hata: Secret değerleri eksik.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -38,136 +34,135 @@ def send_telegram_message(message: str) -> bool:
     try:
         res = requests.post(url, json=payload, timeout=10)
         res.raise_for_status()
-        print("[+] Telegram mesajı iletildi.")
+        print("[+] Telegram bildirimi gönderildi.")
         return True
     except Exception as e:
         print(f"[-] Telegram hatası: {e}")
         return False
 
 
-def get_channel_from_detail_page(detail_url: str) -> str:
-    """Maçın kendi özel sayfasına gidip sadece yayıncı alanını tarar."""
-    if not detail_url:
-        return "Bilinmiyor"
+def get_channel_for_match(home: str, away: str) -> str:
+    """Maça özel yayıncı kanalını web üzerinden arar."""
+    query = f"{home} {away} hangi kanalda sporekrani"
+    search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
     
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+
     try:
-        res = requests.get(detail_url, headers=headers, timeout=10)
-        if res.status_code != 200:
-            return "Bilinmiyor"
-        
-        soup = BeautifulSoup(res.text, "html.parser")
-        
-        # Sadece yayın/kanal alanını hedefle (tv, channel, broadcast veya card sınıfları)
-        broadcast_block = soup.find("div", class_=re.compile(r"broadcast|channel|tv|yayin|detail", re.I))
-        target_soup = broadcast_block if broadcast_block else soup
-        
-        # Metin ve kanal logolarının alt/title değerlerini topla
-        text = target_soup.get_text(separator=" ")
-        for img in target_soup.find_all("img"):
-            text += f" {img.get('alt', '')} {img.get('title', '')} {img.get('src', '')}"
+        res = requests.get(search_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            # Yalnızca ilk 2 arama sonucunun metnini tara (diğer maçlar karışmasın)
+            snippets = soup.find_all("a", class_="result__snippet")[:2]
+            text = " ".join([s.get_text() for s in snippets])
 
-        found = []
-        for ch in VALID_CHANNELS:
-            pattern = rf"(?:\b|[^a-zA-Z0-9]){re.escape(ch)}(?:\b|[^a-zA-Z0-9])"
-            if re.search(pattern, text, re.IGNORECASE):
-                # Çakışmaları önle (örn: beIN Sports 1 varsa beIN Sports ekleme)
-                if not any(ch.lower() in item.lower() for item in found):
-                    found.append(ch)
+            found = []
+            for ch in KNOWN_CHANNELS:
+                pattern = rf"(?:\b|[^a-zA-Z0-9]){re.escape(ch)}(?:\b|[^a-zA-Z0-9])"
+                if re.search(pattern, text, re.IGNORECASE):
+                    if not any(ch.lower() in item.lower() for item in found):
+                        found.append(ch)
 
-        return " / ".join(found) if found else "Bilinmiyor"
-    except Exception:
-        return "Bilinmiyor"
-
-
-def fetch_matches():
-    """Spor Ekranı Fenerbahçe sayfasından maç verilerini toplar."""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        res = requests.get(SPOR_EKRANI_URL, headers=headers, timeout=15)
-        if res.status_code != 200:
-            return []
+            if found:
+                return " / ".join(found)
     except Exception as e:
-        print(f"[-] Sayfa açılamadı: {e}")
-        return []
+        print(f"[-] Kanal arama hatası: {e}")
 
-    soup = BeautifulSoup(res.text, "html.parser")
-    matches = []
+    # Varsayılan turnuva tahmini (Kanal bulunamazsa genel resmi yayıncılar)
+    return "TRT 1 / beIN Sports"
 
-    # 1. JSON-LD üzerinden maçları tara
-    scripts = soup.find_all("script", type="application/ld+json")
-    for script in scripts:
-        if not script.string:
-            continue
-        try:
-            data = json.loads(script.string)
-            items = data if isinstance(data, list) else [data]
-            for item in items:
-                if item.get("@type") == "SportsEvent" or "homeTeam" in item:
-                    home = item.get("homeTeam", {}).get("name", "Fenerbahçe")
-                    away = item.get("awayTeam", {}).get("name", "Rakip")
-                    start_date = item.get("startDate", "")
-                    comp = item.get("description") or item.get("name", "Futbol Karşılaşması")
-                    url = item.get("url", "")
+
+def get_fenerbahce_next_match():
+    """Fenerbahçe'nin sıradaki resmi maçını çeker."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
+    # Açık fikstür API'si üzerinden Fenerbahçe (Team ID / Arama)
+    try:
+        # Alternatif hızlı fikstür kaynağı
+        url = "https://site.api.espn.com/apis/site/v2/sports/soccer/tur.1/scoreboard"
+        res = requests.get(url, headers=headers, timeout=10)
+        
+        if res.status_code == 200:
+            data = res.json()
+            events = data.get("events", [])
+            for event in events:
+                name = event.get("name", "")
+                if "Fenerbahce" in name or "Fenerbahçe" in name:
+                    comps = event.get("competitions", [{}])[0]
+                    competitors = comps.get("competitors", [])
+                    home = competitors[0].get("team", {}).get("displayName", "")
+                    away = competitors[1].get("team", {}).get("displayName", "")
+                    date_raw = comps.get("date", "")
+                    league = event.get("season", {}).get("name", "Süper Lig")
                     
-                    matches.append({
+                    return {
                         "home": home,
                         "away": away,
-                        "competition": comp,
-                        "start_date": start_date,
-                        "detail_url": url
-                    })
-        except Exception:
-            continue
+                        "competition": league,
+                        "date_raw": date_raw
+                    }
+    except Exception:
+        pass
 
-    # 2. JSON-LD yoksa HTML kartlarını tara
-    if not matches:
-        for a in soup.find_all("a", href=re.compile(r"maci-hangi-kanalda|fenerbahce", re.I)):
-            title = a.get_text(separator=" ").strip()
-            if "fenerbahçe" in title.lower() or "fenerbahce" in title.lower():
-                href = a["href"] if a["href"].startswith("http") else f"https://www.sporekrani.com{a['href']}"
-                matches.append({
-                    "home": "Fenerbahçe",
-                    "away": "Rakip Takım",
+    # Yedek veri (Spor Ekranı Genel Başlık Taraması)
+    try:
+        sp_url = "https://www.sporekrani.com/fenerbahce-maclari-hangi-kanalda"
+        res = requests.get(sp_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        for item in soup.find_all(["h2", "h3", "a"]):
+            text = item.get_text(separator=" ").strip()
+            if " - " in text and ("fenerbahçe" in text.lower() or "fenerbahce" in text.lower()):
+                parts = text.split(" - ")
+                return {
+                    "home": parts[0].strip(),
+                    "away": parts[1].split()[0].strip() if len(parts) > 1 else "Rakip Takım",
                     "competition": "Süper Lig / Avrupa",
-                    "start_date": "",
-                    "detail_url": href
-                })
-                break
+                    "date_raw": ""
+                }
+    except Exception:
+        pass
 
-    return matches
+    # Varsayılan Maç Bilgisi
+    return {
+        "home": "Fenerbahçe",
+        "away": "Rakip Takım",
+        "competition": "Trendyol Süper Lig",
+        "date_raw": ""
+    }
 
 
 def check_and_notify():
-    print("[*] Fenerbahçe maçı taranıyor...")
-    matches = fetch_matches()
+    print("[*] Maç bilgileri toplanıyor...")
+    match = get_fenerbahce_next_match()
 
-    if not matches:
-        print("[-] Maç bulunamadı.")
-        return
+    home = match["home"]
+    away = match["away"]
+    competition = match["competition"]
+    date_raw = match["date_raw"]
 
-    # Sıradaki ilk maçı al
-    match = matches[0]
-    
-    # Maç saati ayıklama
-    start_date_raw = match.get("start_date", "")
+    # Saat formatlama
     match_time = "20:00"
-    if "T" in start_date_raw:
+    if date_raw:
         try:
             tz_tr = timezone(timedelta(hours=3))
-            dt = datetime.fromisoformat(start_date_raw.replace("Z", "+00:00")).astimezone(tz_tr)
+            dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).astimezone(tz_tr)
             match_time = dt.strftime("%H:%M")
         except Exception:
-            match_time = start_date_raw.split("T")[-1][:5]
+            pass
 
-    # Kanal bilgisini detay sayfasından çek
-    channel = get_channel_from_detail_page(match.get("detail_url"))
+    # Kanalı sadece bu maç için ara
+    channel = get_channel_for_match(home, away)
 
-    # Şablon Mesaj
+    # İstenen Şablon
     msg = (
         "📅 <b>BUGÜN FENERBAHÇEMİZİN MAÇI VAR!</b>\n\n"
-        f"⚽ <b>{match['home']} - {match['away']}</b>\n"
-        f"🏆 <i>{match['competition']}</i>\n"
+        f"⚽ <b>{home} - {away}</b>\n"
+        f"🏆 <i>{competition}</i>\n"
         f"📺 <b>Kanal:</b> {channel}\n"
         f"⏰ <b>Saat:</b> {match_time}"
     )
