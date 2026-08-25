@@ -1,9 +1,11 @@
+import json
 import os
 import re
-import json
+from datetime import date
+
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, date
+
 
 # ============================================================
 # AYARLAR
@@ -12,52 +14,10 @@ from datetime import datetime, date
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-TEAM_URL = "https://www.sporekrani.com/home/team/fenerbahce/"
+BASE_URL = "https://www.sporekrani.com"
+TEAM_URL = f"{BASE_URL}/home/team/fenerbahce/"
 
-# Sadece gerçek TV kanalları.
-# Platform / frekans / uydu bilgileri alınmaz.
-MAIN_TV_CHANNELS = [
-    "TRT 1",
-    "TRT Spor Yıldız",
-    "TRT Spor",
-    "tabii Spor",
-    "Tabii Spor",
-    "Tabii",
-    "beIN Sports Haber",
-    "Bein Sports Haber",
-    "beIN Sports 1",
-    "Bein Sports 1",
-    "beIN Sports 2",
-    "Bein Sports 2",
-    "beIN Sports 3",
-    "Bein Sports 3",
-    "beIN Sports 4",
-    "Bein Sports 4",
-    "beIN Sports MAX 1",
-    "Bein Sports MAX 1",
-    "beIN Sports MAX 2",
-    "Bein Sports MAX 2",
-    "S Sport Plus",
-    "S Sport 1",
-    "S Sport 2",
-    "S Sport",
-    "Exxen",
-    "TV8,5",
-    "TV8.5",
-    "TV8",
-    "A Spor",
-    "ATV",
-    "Tivibu Spor 1",
-    "Tivibu Spor 2",
-    "Tivibu Spor",
-    "Smart Spor 1",
-    "Smart Spor 2",
-    "Smart Spor",
-    "Spor Smart",
-    "TV 100",
-    "TV100",
-    "FB TV",
-]
+STATE_FILE = "bot_state.json"
 
 HEADERS = {
     "User-Agent": (
@@ -70,24 +30,88 @@ HEADERS = {
 
 TIMEOUT = 15
 
-# Aynı maç için tekrar tekrar bildirim göndermemek amacıyla
-STATE_FILE = "bot_state.json"
+
+# Sadece gerçek yayın kanallarını takip ediyoruz.
+MAIN_TV_CHANNELS = [
+    "TRT 1",
+    "TRT Spor Yıldız",
+    "TRT Spor",
+    "Tabii Spor",
+    "Tabii",
+
+    "beIN Sports Haber",
+    "beIN Sports 1",
+    "beIN Sports 2",
+    "beIN Sports 3",
+    "beIN Sports 4",
+    "beIN Sports MAX 1",
+    "beIN Sports MAX 2",
+
+    "S Sport Plus",
+    "S Sport 1",
+    "S Sport 2",
+    "S Sport",
+
+    "Exxen",
+
+    "TV8,5",
+    "TV8.5",
+    "TV8",
+
+    "A Spor",
+    "ATV",
+
+    "Tivibu Spor 1",
+    "Tivibu Spor 2",
+    "Tivibu Spor",
+
+    "Smart Spor 1",
+    "Smart Spor 2",
+    "Smart Spor",
+
+    "Spor Smart",
+
+    "FB TV",
+]
 
 
 # ============================================================
-# HTTP
+# YARDIMCI FONKSİYONLAR
 # ============================================================
 
-def get_page(url: str):
-    """Sayfayı indirir."""
+def normalize_text(text):
+    """Fazla boşlukları temizler."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def absolute_url(url):
+    """Göreceli URL'yi tam URL'ye çevirir."""
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+
+    if url.startswith("/"):
+        return BASE_URL + url
+
+    return BASE_URL + "/" + url
+
+
+# ============================================================
+# WEB
+# ============================================================
+
+def get_page(url):
+    print(f"[*] Sayfa okunuyor: {url}")
+
     try:
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=TIMEOUT
+            timeout=TIMEOUT,
         )
 
         response.raise_for_status()
+
+        print(f"[+] HTTP {response.status_code}")
 
         return response.text
 
@@ -100,10 +124,9 @@ def get_page(url: str):
 # TELEGRAM
 # ============================================================
 
-def send_telegram_message(message: str) -> bool:
-
+def send_telegram_message(message):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[-] Hata: TELEGRAM_TOKEN veya CHAT_ID eksik.")
+        print("[-] TELEGRAM_TOKEN veya CHAT_ID eksik.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -112,17 +135,23 @@ def send_telegram_message(message: str) -> bool:
         "chat_id": CHAT_ID,
         "text": message,
         "parse_mode": "HTML",
-        "disable_web_page_preview": True
+        "disable_web_page_preview": True,
     }
 
     try:
         response = requests.post(
             url,
             json=payload,
-            timeout=10
+            timeout=10,
         )
 
         response.raise_for_status()
+
+        data = response.json()
+
+        if not data.get("ok"):
+            print(f"[-] Telegram API hatası: {data}")
+            return False
 
         print("[+] Telegram bildirimi gönderildi.")
         return True
@@ -133,11 +162,13 @@ def send_telegram_message(message: str) -> bool:
 
 
 # ============================================================
-# DURUM DOSYASI
+# STATE
 # ============================================================
 
 def load_state():
-    """Daha önce bildirilmiş maçları yükler."""
+    """
+    Daha önce Telegram'a gönderilmiş maç/kanal kayıtlarını okur.
+    """
 
     if not os.path.exists(STATE_FILE):
         return {
@@ -145,25 +176,40 @@ def load_state():
         }
 
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(STATE_FILE, "r", encoding="utf-8") as file:
+            state = json.load(file)
 
-    except Exception:
+        if not isinstance(state, dict):
+            return {
+                "notified_matches": []
+            }
+
+        if "notified_matches" not in state:
+            state["notified_matches"] = []
+
+        return state
+
+    except Exception as e:
+        print(f"[-] State dosyası okunamadı: {e}")
+
         return {
             "notified_matches": []
         }
 
 
 def save_state(state):
+    """State'i repository içindeki JSON dosyasına kaydeder."""
 
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
+        with open(STATE_FILE, "w", encoding="utf-8") as file:
             json.dump(
                 state,
-                f,
+                file,
                 ensure_ascii=False,
-                indent=2
+                indent=2,
             )
+
+        print("[+] State dosyası güncellendi.")
 
     except Exception as e:
         print(f"[-] State dosyası kaydedilemedi: {e}")
@@ -173,93 +219,250 @@ def save_state(state):
 # KANAL TESPİTİ
 # ============================================================
 
-def detect_channels(text: str):
+def detect_channels(text):
+    """
+    Verilen metin içerisinde bilinen ana TV kanallarını arar.
+    """
+
+    text = normalize_text(text)
 
     detected = []
 
-    normalized_text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
+    # Uzun isimleri önce kontrol etmek daha güvenli.
+    channels_sorted = sorted(
+        MAIN_TV_CHANNELS,
+        key=len,
+        reverse=True,
+    )
 
-    for channel in MAIN_TV_CHANNELS:
+    for channel in channels_sorted:
 
         pattern = (
-            rf"(?<![a-zA-Z0-9])"
-            rf"{re.escape(channel)}"
-            rf"(?![a-zA-Z0-9])"
+            r"(?<![A-Za-z0-9])"
+            + re.escape(channel)
+            + r"(?![A-Za-z0-9])"
         )
 
         if re.search(
             pattern,
-            normalized_text,
-            re.IGNORECASE
+            text,
+            flags=re.IGNORECASE,
         ):
+            canonical = canonical_channel_name(channel)
 
-            # Aynı kanalın farklı yazımlarını tekrar ekleme
-            already_exists = any(
-                c.lower() == channel.lower()
-                for c in detected
-            )
+            if canonical not in detected:
+                detected.append(canonical)
 
-            if not already_exists:
-                detected.append(channel)
+    return detected
 
-    # Daha temiz görünmesi için bazı varyasyonları normalize et
-    normalized_channels = []
 
-    for channel in detected:
+def canonical_channel_name(channel):
+    """
+    Farklı yazımları tek bir kanal adına dönüştürür.
+    """
 
-        lower = channel.lower()
+    normalized = channel.lower().replace(" ", "")
 
-        if lower in ["bein sports 1"]:
-            display_name = "beIN Sports 1"
+    mapping = {
+        "beinsporhaber": "beIN Sports Haber",
+        "beinSports1".lower().replace(" ", ""): "beIN Sports 1",
+        "beinSports2".lower().replace(" ", ""): "beIN Sports 2",
+        "beinSports3".lower().replace(" ", ""): "beIN Sports 3",
+        "beinSports4".lower().replace(" ", ""): "beIN Sports 4",
+        "beinsportsmax1": "beIN Sports MAX 1",
+        "beinsportsmax2": "beIN Sports MAX 2",
+        "tv8.5": "TV8,5",
+        "tv85": "TV8,5",
+        "sporSmart".lower().replace(" ", ""): "Spor Smart",
+    }
 
-        elif lower in ["bein sports 2"]:
-            display_name = "beIN Sports 2"
+    return mapping.get(normalized, channel)
 
-        elif lower in ["bein sports 3"]:
-            display_name = "beIN Sports 3"
 
-        elif lower in ["bein sports 4"]:
-            display_name = "beIN Sports 4"
+# ============================================================
+# TARİH PARSE
+# ============================================================
 
-        elif lower in ["bein sports haber"]:
-            display_name = "beIN Sports Haber"
+TURKISH_MONTHS = {
+    "ocak": 1,
+    "şubat": 2,
+    "mart": 3,
+    "nisan": 4,
+    "mayıs": 5,
+    "haziran": 6,
+    "temmuz": 7,
+    "ağustos": 8,
+    "eylül": 9,
+    "ekim": 10,
+    "kasım": 11,
+    "aralık": 12,
+}
 
-        elif lower == "bein sports max 1":
-            display_name = "beIN Sports MAX 1"
 
-        elif lower == "bein sports max 2":
-            display_name = "beIN Sports MAX 2"
+def parse_date_from_text(text):
+    """
+    Örneğin:
+    26 Ağustos 2026
 
-        elif lower in ["tabii spor"]:
-            display_name = "tabii Spor"
+    değerini date nesnesine dönüştürür.
+    """
 
-        elif lower == "tv100":
-            display_name = "TV 100"
+    pattern = (
+        r"\b"
+        r"(\d{1,2})"
+        r"\s+"
+        r"([A-Za-zÇĞİÖŞÜçğıöşü]+)"
+        r"\s+"
+        r"(\d{4})"
+        r"\b"
+    )
 
-        elif lower == "spor smart":
-            display_name = "Spor Smart"
+    match = re.search(
+        pattern,
+        text,
+        flags=re.IGNORECASE,
+    )
 
-        else:
-            display_name = channel
+    if not match:
+        return None
 
-        if display_name not in normalized_channels:
-            normalized_channels.append(display_name)
+    day = int(match.group(1))
+    month_name = match.group(2).lower()
+    year = int(match.group(3))
 
-    return normalized_channels
+    month = TURKISH_MONTHS.get(month_name)
+
+    if not month:
+        return None
+
+    try:
+        return date(
+            year,
+            month,
+            day,
+        )
+    except ValueError:
+        return None
+
+
+# ============================================================
+# SAAT PARSE
+# ============================================================
+
+def parse_time_from_text(text):
+    """
+    İlk geçerli HH:MM saatini bulur.
+    """
+
+    match = re.search(
+        r"\b([01]?\d|2[0-3]):([0-5]\d)\b",
+        text,
+    )
+
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+# ============================================================
+# ORGANİZASYON
+# ============================================================
+
+def detect_competition(text):
+    """
+    Sayfadaki bilinen organizasyonlardan birini bulmaya çalışır.
+    """
+
+    competitions = [
+        "UEFA Şampiyonlar Ligi Play-Off",
+        "UEFA Şampiyonlar Ligi Ön Eleme",
+        "UEFA Şampiyonlar Ligi",
+        "UEFA Avrupa Ligi Play-Off",
+        "UEFA Avrupa Ligi",
+        "UEFA Konferans Ligi",
+        "Trendyol Süper Lig",
+        "Süper Lig",
+        "Ziraat Türkiye Kupası",
+        "Türkiye Kupası",
+    ]
+
+    lower_text = text.lower()
+
+    for competition in competitions:
+        if competition.lower() in lower_text:
+            return competition
+
+    return "Futbol"
+
+
+# ============================================================
+# TAKIM ADLARI
+# ============================================================
+
+def parse_teams_from_match_page(soup):
+    """
+    Maç sayfasındaki başlık/başlık benzeri alanlardan
+    iki takım adını bulmaya çalışır.
+    """
+
+    candidates = []
+
+    # Önce h1-h2 başlıklarını kontrol et.
+    for tag in soup.find_all(["h1", "h2", "h3"]):
+
+        text = normalize_text(
+            tag.get_text(" ", strip=True)
+        )
+
+        if text:
+            candidates.append(text)
+
+    # Sayfa title'ını da kontrol et.
+    if soup.title:
+        title_text = normalize_text(
+            soup.title.get_text(" ", strip=True)
+        )
+
+        if title_text:
+            candidates.append(title_text)
+
+    for text in candidates:
+
+        # Örn:
+        # Lyon - Fenerbahçe
+        # Lyon vs Fenerbahçe
+        # Lyon - Fenerbahçe maçı
+        match = re.search(
+            r"(.+?)\s+(?:-|–|—|vs)\s+(.+?)(?:\s+maçı|\s+h?angi kanalda.*)?$",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+
+            home = normalize_text(match.group(1))
+            away = normalize_text(match.group(2))
+
+            # Çok uzun/uygunsuz başlıkları ele
+            if (
+                1 <= len(home) <= 60
+                and 1 <= len(away) <= 60
+                and "spor ekranı" not in home.lower()
+            ):
+                return home, away
+
+    return None, None
 
 
 # ============================================================
 # MAÇ DETAY SAYFASI
 # ============================================================
 
-def parse_match_detail(url: str):
-
-    print(f"[*] Maç detay sayfası okunuyor: {url}")
-
+def parse_match_detail(url):
     html = get_page(url)
 
     if not html:
@@ -267,169 +470,95 @@ def parse_match_detail(url: str):
 
     soup = BeautifulSoup(
         html,
-        "html.parser"
+        "html.parser",
     )
 
-    # Sayfadaki tüm metni al
-    text = soup.get_text(
-        separator=" ",
-        strip=True
+    full_text = normalize_text(
+        soup.get_text(" ", strip=True)
     )
+
+    # --------------------------------------------------------
+    # TAKIMLAR
+    # --------------------------------------------------------
+
+    home_team, away_team = parse_teams_from_match_page(soup)
+
+    if not home_team or not away_team:
+
+        print("[-] Takımlar tespit edilemedi.")
+        return None
+
+    # Sadece Fenerbahçe maçlarını kabul et.
+    combined_teams = (
+        f"{home_team} {away_team}"
+    ).lower()
+
+    if "fenerbahçe" not in combined_teams:
+        print("[-] Bu sayfa Fenerbahçe maçı değil.")
+        return None
 
     # --------------------------------------------------------
     # TARİH
     # --------------------------------------------------------
 
-    date_match = re.search(
-        r"(\d{2})\s+([A-Za-zÇĞİÖŞÜçğıöşü]+)\s+(\d{4})",
-        text
+    match_date = parse_date_from_text(
+        full_text
     )
 
-    match_date = None
-
-    if date_match:
-
-        day = int(date_match.group(1))
-        year = int(date_match.group(3))
-
-        months = {
-            "Ocak": 1,
-            "Şubat": 2,
-            "Mart": 3,
-            "Nisan": 4,
-            "Mayıs": 5,
-            "Haziran": 6,
-            "Temmuz": 7,
-            "Ağustos": 8,
-            "Eylül": 9,
-            "Ekim": 10,
-            "Kasım": 11,
-            "Aralık": 12,
-        }
-
-        month_name = date_match.group(2)
-
-        month = months.get(month_name)
-
-        if month:
-            match_date = date(
-                year,
-                month,
-                day
-            )
+    if not match_date:
+        print("[-] Maç tarihi bulunamadı.")
+        return None
 
     # --------------------------------------------------------
     # SAAT
     # --------------------------------------------------------
 
-    time_match = re.search(
-        r"\b([01]?\d|2[0-3]):([0-5]\d)\b",
-        text
+    match_time = parse_time_from_text(
+        full_text
     )
 
-    match_time = None
-
-    if time_match:
-        match_time = (
-            f"{int(time_match.group(1)):02d}:"
-            f"{time_match.group(2)}"
-        )
-
-    # --------------------------------------------------------
-    # MAÇ / TAKIMLAR
-    # --------------------------------------------------------
-
-    home_team = None
-    away_team = None
-
-    # Sayfadaki başlık üzerinden daha güvenli yöntem
-    title = soup.find("h1")
-
-    if title:
-
-        title_text = title.get_text(
-            " ",
-            strip=True
-        )
-
-        match_teams = re.search(
-            r"(.+?)\s+vs\s+(.+?)\s+maçı",
-            title_text,
-            re.IGNORECASE
-        )
-
-        if match_teams:
-
-            home_team = match_teams.group(1).strip()
-            away_team = match_teams.group(2).strip()
+    if not match_time:
+        print("[-] Maç saati bulunamadı.")
+        return None
 
     # --------------------------------------------------------
     # ORGANİZASYON
     # --------------------------------------------------------
 
-    competition = None
-
-    # Sayfadaki bilinen organizasyonlardan ilkini bul
-    competitions = [
-        "UEFA Şampiyonlar Ligi Play-Off",
-        "UEFA Şampiyonlar Ligi Ön Eleme",
-        "UEFA Şampiyonlar Ligi",
-        "UEFA Avrupa Ligi Play-Off",
-        "UEFA Avrupa Ligi",
-        "UEFA Avrupa Konferans Ligi",
-        "Trendyol Süper Lig",
-        "Ziraat Türkiye Kupası",
-        "Basketbol Avrupa Ligi",
-        "Euroleague",
-    ]
-
-    for comp in competitions:
-
-        if comp.lower() in text.lower():
-            competition = comp
-            break
+    competition = detect_competition(
+        full_text
+    )
 
     # --------------------------------------------------------
-    # KANAL
+    # KANALLAR
     # --------------------------------------------------------
 
-    channels = detect_channels(text)
+    channels = detect_channels(
+        full_text
+    )
 
     # --------------------------------------------------------
     # SONUÇ
     # --------------------------------------------------------
 
-    if not home_team or not away_team:
-        print("[-] Takımlar tespit edilemedi.")
-        return None
-
-    if not match_date:
-        print("[-] Maç tarihi tespit edilemedi.")
-        return None
-
-    if not match_time:
-        print("[-] Maç saati tespit edilemedi.")
-        return None
-
-    return {
+    match = {
         "home": home_team,
         "away": away_team,
         "date": match_date.isoformat(),
         "time": match_time,
-        "competition": competition or "Futbol",
+        "competition": competition,
         "channels": channels,
         "url": url,
     }
 
+    return match
+
 
 # ============================================================
-# TAKIM SAYFASINDAN MAÇLARI BUL
+# TAKIM SAYFASINDAN MAÇ LİNKLERİNİ BUL
 # ============================================================
 
-def get_fenerbahce_matches():
-
-    print("[*] Fenerbahçe takım sayfası okunuyor...")
-
+def get_match_links():
     html = get_page(TEAM_URL)
 
     if not html:
@@ -437,12 +566,11 @@ def get_fenerbahce_matches():
 
     soup = BeautifulSoup(
         html,
-        "html.parser"
+        "html.parser",
     )
 
-    matches = []
+    links = []
 
-    # Fenerbahçe takım sayfasındaki maç linklerini bul
     for link in soup.find_all("a", href=True):
 
         href = link.get("href", "")
@@ -450,44 +578,35 @@ def get_fenerbahce_matches():
         if "/home/match/" not in href:
             continue
 
-        match_text = link.get_text(
-            " ",
-            strip=True
-        )
+        href = absolute_url(href)
 
-        # Sadece futbol maçlarını hedefliyoruz.
-        # Fenerbahçe Beko / kadın basketbolu vb.
-        # yanlışlıkla alınmasın.
-        if "fenerbahçe" not in match_text.lower():
-            continue
+        if href not in links:
+            links.append(href)
 
-        if not href.startswith("http"):
-            href = "https://www.sporekrani.com" + href
+    print(f"[+] {len(links)} adet maç linki bulundu.")
 
-        print(f"[+] Maç bulundu: {match_text}")
-        print(f"    {href}")
-
-        match_data = parse_match_detail(href)
-
-        if match_data:
-            matches.append(match_data)
-
-    # Aynı URL birden fazla kez geldiyse temizle
-    unique_matches = {}
-
-    for match in matches:
-        unique_matches[match["url"]] = match
-
-    return list(unique_matches.values())
+    return links
 
 
 # ============================================================
-# YAKLAŞAN MAÇI BUL
+# YAKLAŞAN FENERBAHÇE MAÇI
 # ============================================================
 
 def get_next_fenerbahce_match():
+    links = get_match_links()
 
-    matches = get_fenerbahce_matches()
+    if not links:
+        print("[-] Maç linki bulunamadı.")
+        return None
+
+    matches = []
+
+    for link in links:
+
+        match = parse_match_detail(link)
+
+        if match:
+            matches.append(match)
 
     if not matches:
         print("[-] Fenerbahçe maçı bulunamadı.")
@@ -510,13 +629,13 @@ def get_next_fenerbahce_match():
             upcoming.append(match)
 
     if not upcoming:
-        print("[-] Yaklaşan Fenerbahçe maçı yok.")
+        print("[-] Yaklaşan Fenerbahçe maçı bulunamadı.")
         return None
 
     upcoming.sort(
-        key=lambda x: (
-            x["date"],
-            x["time"]
+        key=lambda match: (
+            match["date"],
+            match["time"],
         )
     )
 
@@ -524,11 +643,34 @@ def get_next_fenerbahce_match():
 
 
 # ============================================================
-# BİLDİRİM
+# BİLDİRİM ANAHTARI
+# ============================================================
+
+def create_notification_key(match):
+    """
+    Aynı maç + aynı kanal için benzersiz anahtar.
+
+    Kanal değişirse anahtar değişir ve yeni bildirim gönderilir.
+    """
+
+    channels = "|".join(
+        sorted(match["channels"])
+    )
+
+    return (
+        f"{match['date']}|"
+        f"{match['time']}|"
+        f"{match['home']}|"
+        f"{match['away']}|"
+        f"{channels}"
+    )
+
+
+# ============================================================
+# TELEGRAM MESAJI
 # ============================================================
 
 def create_message(match):
-
     match_date = date.fromisoformat(
         match["date"]
     )
@@ -540,39 +682,38 @@ def create_message(match):
     else:
         title = "FENERBAHÇEMİZİN YAKLAŞAN MAÇI"
 
-    channels = match["channels"]
-
-    if channels:
-        channel_text = " / ".join(channels)
+    if match["channels"]:
+        channel_text = " / ".join(
+            match["channels"]
+        )
     else:
-        channel_text = "Kanal henüz belirtilmemiş"
+        channel_text = "Henüz belirtilmemiş"
 
-    message = (
+    return (
         f"📅 <b>{title}</b>\n\n"
         f"⚽ <b>{match['home']} - {match['away']}</b>\n"
         f"🏆 <i>{match['competition']}</i>\n"
-        f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
+        f"📅 <b>Tarih:</b> "
+        f"{match_date.strftime('%d.%m.%Y')}\n"
         f"⏰ <b>Saat:</b> {match['time']}\n"
         f"📺 <b>Kanal:</b> {channel_text}\n"
     )
 
-    return message
-
 
 # ============================================================
-# ANA KONTROL
+# ANA PROGRAM
 # ============================================================
 
 def check_and_notify():
 
-    print("=" * 50)
+    print("=" * 60)
     print("FENERBAHÇE BOTU ÇALIŞIYOR")
-    print("=" * 50)
+    print("=" * 60)
 
     match = get_next_fenerbahce_match()
 
     if not match:
-        print("[-] Bildirim gönderilecek maç bulunamadı.")
+        print("[-] İşlenecek maç bulunamadı.")
         return
 
     print()
@@ -590,70 +731,86 @@ def check_and_notify():
         f"    Organizasyon: {match['competition']}"
     )
     print(
-        f"    Kanal: {', '.join(match['channels']) if match['channels'] else 'Yok'}"
+        f"    Kanal: "
+        f"{', '.join(match['channels']) if match['channels'] else 'Belirtilmemiş'}"
     )
-
-    # --------------------------------------------------------
-    # Bildirim anahtarı
-    # --------------------------------------------------------
-
-    # Aynı maç için tekrar tekrar bildirim gönderilmesini önler.
-    #
-    # Kanal sonradan değişirse yeni bildirim gönderebilir.
-    channel_key = "|".join(match["channels"])
-
-    notification_key = (
-        f"{match['date']}|"
-        f"{match['time']}|"
-        f"{match['home']}|"
-        f"{match['away']}|"
-        f"{channel_key}"
+    print(
+        f"    URL: {match['url']}"
     )
 
     state = load_state()
+
+    notification_key = create_notification_key(
+        match
+    )
 
     notified_matches = state.get(
         "notified_matches",
         []
     )
 
+    # --------------------------------------------------------
+    # DAHA ÖNCE BİLDİRİLDİ Mİ?
+    # --------------------------------------------------------
+
     if notification_key in notified_matches:
 
         print()
-        print("[*] Bu bilgi daha önce Telegram'a gönderilmiş.")
-        print("[*] Yeni bildirim gönderilmeyecek.")
+        print(
+            "[*] Bu maç + kanal bilgisi daha önce bildirildi."
+        )
+        print(
+            "[*] Yeni Telegram bildirimi gönderilmeyecek."
+        )
 
         return
 
     # --------------------------------------------------------
-    # Telegram
+    # YENİ BİLDİRİM
     # --------------------------------------------------------
 
-    message = create_message(match)
-
     print()
+    print("[*] Yeni maç/kanal bilgisi bulundu.")
     print("[*] Telegram bildirimi gönderiliyor...")
 
-    success = send_telegram_message(message)
+    message = create_message(
+        match
+    )
 
-    if success:
+    success = send_telegram_message(
+        message
+    )
 
-        notified_matches.append(
-            notification_key
+    if not success:
+        print(
+            "[-] Telegram gönderimi başarısız."
         )
+        return
 
-        # Son 50 bildirimi tut
-        state["notified_matches"] = notified_matches[-50:]
+    # --------------------------------------------------------
+    # STATE KAYDET
+    # --------------------------------------------------------
 
-        save_state(state)
+    notified_matches.append(
+        notification_key
+    )
 
-        print("[+] Bildirim kaydedildi.")
+    # Gereksiz şekilde sonsuza kadar büyümesin.
+    # Son 100 kaydı tutuyoruz.
+    state["notified_matches"] = (
+        notified_matches[-100:]
+    )
 
-    print("=" * 50)
+    save_state(
+        state
+    )
+
+    print("[+] Bildirim state'e kaydedildi.")
+    print("=" * 60)
 
 
 # ============================================================
-# ÇALIŞTIR
+# ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
