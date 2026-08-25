@@ -99,37 +99,38 @@ def send_telegram_message(message):
         print("[-] TELEGRAM_TOKEN veya CHAT_ID eksik.")
         return False
 
+    # Virgülle ayrılmış ID'leri listeye çevirip temizle
+    chat_ids = [cid.strip() for cid in CHAT_ID.split(",") if cid.strip()]
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
+    success_count = 0
+    for cid in chat_ids:
+        payload = {
+            "chat_id": cid,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
 
-    try:
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=10,
-        )
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        response.raise_for_status()
+            if data.get("ok"):
+                print(f"[+] Telegram bildirimi gönderildi: {cid}")
+                success_count += 1
+            else:
+                print(f"[-] Telegram API hatası ({cid}): {data}")
 
-        data = response.json()
+        except requests.RequestException as e:
+            print(f"[-] Telegram hatası ({cid}): {e}")
 
-        if not data.get("ok"):
-            print(f"[-] Telegram API hatası: {data}")
-            return False
-
-        print("[+] Telegram bildirimi gönderildi.")
-
-        return True
-
-    except requests.RequestException as e:
-        print(f"[-] Telegram hatası: {e}")
-        return False
+    return success_count > 0
 
 
 def load_state():
