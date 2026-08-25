@@ -2,23 +2,49 @@ name: Fenerbahçe Bot
 
 on:
   schedule:
-    # Her gün Türkiye saatiyle 09:30'da (UTC 06:30) tek bir kontrol yapar
+    # Her gün Türkiye saatiyle 09:30
+    # GitHub Actions cron UTC kullandığı için 06:30 UTC
     - cron: '30 6 * * *'
-  workflow_dispatch: # İstediğiniz an manuel test edebilmeniz için
+
+  # GitHub Actions panelinden manuel çalıştırma
+  workflow_dispatch:
+
+# bot_state.json dosyasını repository'ye yazabilmek için
+permissions:
+  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: Python 3.12 kur
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install
+
+      - name: Bağımlılıkları kur
         run: pip install -r requirements.txt
-      - name: Run bot
+
+      - name: Botu çalıştır
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python bot.py
+
+      - name: State değiştiyse GitHub'a kaydet
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add bot_state.json
+
+          if git diff --cached --quiet; then
+            echo "State değişmedi."
+          else
+            git commit -m "Update Fenerbahce bot state"
+            git push
+          fi
