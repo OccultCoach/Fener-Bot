@@ -413,51 +413,32 @@ def detect_competition(text):
 
 def parse_teams_from_match_page(soup):
     candidates = []
-
-    for tag in soup.find_all(
-        ["h1", "h2", "h3"]
-    ):
-
-        text = normalize_text(
-            tag.get_text(
-                " ",
-                strip=True
-            )
-        )
-
+    for tag in soup.find_all(["h1", "h2", "h3"]):
+        text = normalize_text(tag.get_text(" ", strip=True))
         if text:
             candidates.append(text)
 
     if soup.title:
-
-        title_text = normalize_text(
-            soup.title.get_text(
-                " ",
-                strip=True
-            )
-        )
-
+        title_text = normalize_text(soup.title.get_text(" ", strip=True))
         if title_text:
             candidates.append(title_text)
 
     for text in candidates:
-
+        # Başlıktaki gün-ay-yıl bilgisini temizle
+        cleaned_text = re.sub(r"\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4}", "", text, flags=re.IGNORECASE).strip()
+        
         match = re.search(
-            r"(.+?)\s+(?:-|–|—|vs)\s+"
-            r"(.+?)(?:\s+maçı|\s+h?angi kanalda.*)?$",
-            text,
+            r"(.+?)\s+(?:-|–|—|vs)\s+(.+?)(?:\s+maçı|\s+h?angi kanalda.*)?$",
+            cleaned_text,
             flags=re.IGNORECASE,
         )
-
         if match:
+            home = normalize_text(match.group(1))
+            away = normalize_text(match.group(2))
+            if 1 <= len(home) <= 60 and 1 <= len(away) <= 60 and "spor ekranı" not in home.lower():
+                return home, away
 
-            home = normalize_text(
-                match.group(1)
-            )
-
-            away = normalize_text(
-                match.group(2)
-            )
+    return None, None
 
             if (
                 1 <= len(home) <= 60
