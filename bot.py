@@ -435,6 +435,7 @@ def parse_teams_from_match_page(soup):
         if match:
             home = normalize_text(match.group(1))
             away = normalize_text(match.group(2))
+            away = re.sub(r"\s+maçı.*$", "", away, flags=re.IGNORECASE).strip()
             if 1 <= len(home) <= 60 and 1 <= len(away) <= 60 and "spor ekranı" not in home.lower():
                 return home, away
 
