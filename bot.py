@@ -682,25 +682,19 @@ def create_message(match):
     )
 
     if match_date == date.today():
-
         title = (
             "BUGÜN FENERBAHÇEMİZİN MAÇI VAR!"
         )
-
     else:
-
         title = (
             "FENERBAHÇEMİZİN YAKLAŞAN MAÇI"
         )
 
     if match["channels"]:
-
         channel_text = " / ".join(
             match["channels"]
         )
-
     else:
-
         channel_text = "Henüz belirtilmemiş"
 
     return (
