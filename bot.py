@@ -440,15 +440,6 @@ def parse_teams_from_match_page(soup):
 
     return None, None
 
-            if (
-                1 <= len(home) <= 60
-                and 1 <= len(away) <= 60
-                and "spor ekranı" not in home.lower()
-            ):
-                return home, away
-
-    return None, None
-
 
 def parse_match_detail(url):
     html = get_page(url)
