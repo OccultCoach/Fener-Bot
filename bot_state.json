@@ -1,10 +1,4 @@
+JSON
 {
-  "notified_matches": [
-    "MATCHDAY|2026-08-26|22:00|Lyon|Fenerbahçe|TRT 1|CBC Sport",
-    "SOON|2026-08-26|22:00|Lyon|Fenerbahçe|TRT 1|CBC Sport",
-    "2026-08-30|21:30|Samsunspor|Fenerbahçe|beIN Sports 1"
-  ],
-  "next_match_date": "2026-08-26",
-  "active_match": null,
-  "last_notified_upcoming": null
+  "notified_matches": []
 }
