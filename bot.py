@@ -447,7 +447,6 @@ def get_live_match_data(match):
         fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
         match_id = None
         
-        # 1.1 UTC Saatini Türkiye Saatine çevirerek güvenli tarih eşleştirme
         for fix in fixtures:
             fix_utc_str = fix.get("status", {}).get("utcTime", "")
             if fix_utc_str:
@@ -517,7 +516,7 @@ def get_live_match_data(match):
 
 
 def get_highlights_url(match):
-    """2. Geliştirme: Arama sorgusuna maçın oynandığı yıl eklenerek en güncel özet hedeflenir."""
+    """Arama sorgusuna maçın oynandığı yıl eklenerek en güncel özet hedeflenir."""
     competition = match.get("competition", "")
     home = match.get("home", "")
     away = match.get("away", "")
@@ -547,7 +546,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
     match_date = date.fromisoformat(match["date"])
     channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
 
-    # 1. Kadro Açıklandığında (Kadro üstte bitişik, maç detayları altta 1 satır boşlukla)
+    # 1. Kadro Açıklandığında
     if notification_type == "LINEUPS" and lineup:
         gk_text = ", ".join(lineup.get("GK", [])) if lineup.get("GK") else "Açıklanıyor..."
         df_text = ", ".join(lineup.get("DF", [])) if lineup.get("DF") else "Açıklanıyor..."
@@ -569,12 +568,12 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
     # 2. Maça 15 Dk Kala
     if notification_type == "STARTING_SOON":
         return (
-            f"🚨 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
+            f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
             f"⏰ <b>Saat:</b> {match['time']}\n"
             f"📺 <b>Kanal:</b> {channel_text}\n\n"
-            f"💛💙 <i>Haydi Fenerbahçe! Ekran başına geçme zamanı.</i>"
+            f"💛💙 <i>Haydi Fenerbahçeli! Ekran başına geçme zamanı.</i>"
         )
 
     # 3. Maç Sona Erdiğinde (Nihai Skorlu)
@@ -584,7 +583,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"🏁 💛 <b>MAÇ SONA ERDİ!</b> 💙 🎉\n\n"
             f"⚽️ <b>{match_title}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n\n"
-            f"🟡🔵 Karşılaşma tamamlandı! Maçın geniş özeti ve gollerini aşağıdaki butondan izleyebilirsiniz."
+            f"🟡🔵 Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız."
         )
 
     # 4. Sabah / Günlük Bildirim (MATCHDAY)
