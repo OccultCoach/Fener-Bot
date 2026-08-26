@@ -5,9 +5,9 @@ on:
     # 1. Sabah 09:30 (06:30 UTC) - Günlük genel kontrol ve "Bugün Maç Var" bildirimi
     - cron: '30 6 * * *'
 
-    # 2. Akşam 18:30 - 00:45 arası her 15 dakikada bir (15:30 - 21:45 UTC)
-    # Kadro (1 saat kala), Başlıyor (15 dk kala) ve Maç Sonu bildirimlerini yakalar
-    - cron: '*/15 15-21 * * *'
+    # 2. Türkiye saatiyle 13:00 - 00:45 arası her 15 dakikada bir (10:00 - 21:45 UTC)
+    # Gündüz (16:00/17:00) ve Akşam (19:00/22:00) tüm maçların bildirimlerini eksiksiz yakalar
+    - cron: '*/15 10-21 * * *'
 
   # Manuel çalıştırma butonu
   workflow_dispatch:
