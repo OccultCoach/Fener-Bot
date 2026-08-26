@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
 
-# Çıktıların GitHub Actions loglarında anında görünmesi için
+# Çıktıların loglarda anında görünmesi için
 sys.stdout.reconfigure(line_buffering=True)
 
 # Türkiye Saati (UTC+3)
@@ -129,17 +129,18 @@ def send_telegram_message(message):
 
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return {"notified_matches": []}
+        return {"notified_matches": [], "next_match_date": None}
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as file:
             state = json.load(file)
         if not isinstance(state, dict):
-            return {"notified_matches": []}
+            return {"notified_matches": [], "next_match_date": None}
         state.setdefault("notified_matches", [])
+        state.setdefault("next_match_date", None)
         return state
     except Exception as e:
         print(f"[-] State dosyası okunamadı: {e}", flush=True)
-        return {"notified_matches": []}
+        return {"notified_matches": [], "next_match_date": None}
 
 
 def save_state(state):
@@ -435,6 +436,19 @@ def check_and_notify():
     print("FENERBAHÇE BOTU ÇALIŞIYOR", flush=True)
     print("=" * 60, flush=True)
 
+    now_tr = datetime.now(TURKEY_TZ)
+    today_str = now_tr.date().isoformat()
+    state = load_state()
+
+    # Akşam kontrollerinde gereksiz sorgu engeli:
+    # Eğer sabahki kontrolde sıradaki maçın bugün olmadığı kesinleştiyse, web sitesine istek atmadan çık.
+    next_match_date = state.get("next_match_date")
+    if now_tr.hour >= 12 and next_match_date and next_match_date != today_str:
+        print(f"[*] Bugün ({today_str}) maç günü değil. Sıradaki maç tarihi: {next_match_date}", flush=True)
+        print("[*] Web sitesi taranmayacak. İşlem 1 saniyede tamamlandı.", flush=True)
+        print("=" * 60, flush=True)
+        return
+
     match = get_next_fenerbahce_match()
     if not match:
         print("[-] İşlenecek maç bulunamadı.", flush=True)
@@ -452,17 +466,17 @@ def check_and_notify():
     channel_log = ", ".join(match["channels"]) if match["channels"] else "Belirtilmemiş"
     print(f"    Kanal: {channel_log}\n    URL: {match['url']}", flush=True)
 
-    state = load_state()
+    # Sıradaki maçın tarihini state'e kaydet
+    state["next_match_date"] = match["date"]
+
     base_key = create_notification_key(match)
     notified_matches = state.get("notified_matches", [])
 
-    # Şu anki Türkiye saati ve maç saati hesaplaması
-    now_tr = datetime.now(TURKEY_TZ)
     match_dt_str = f"{match['date']} {match['time']}"
     match_dt = datetime.strptime(match_dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
 
     time_diff_minutes = (match_dt - now_tr).total_seconds() / 60
-    is_today = (match["date"] == now_tr.date().isoformat())
+    is_today = (match["date"] == today_str)
 
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
@@ -475,13 +489,14 @@ def check_and_notify():
     elif is_today:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
-    # 3. Kontrol: Gelecek yaklaşan maç bildirimi
+    # 3. Kontrol: Fikstüre yeni giren maç bildirimi
     else:
         target_key = base_key
         notification_type = "UPCOMING"
 
     if target_key in notified_matches:
         print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}).\n[*] Yeni Telegram bildirimi gönderilmeyecek.", flush=True)
+        save_state(state)
         return
 
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
