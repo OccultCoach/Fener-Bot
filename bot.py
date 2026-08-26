@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
 
-# Logların anında görünmesi için
+# Logların anında GitHub Actions konsoluna dökülmesi için
 sys.stdout.reconfigure(line_buffering=True)
 
 # Türkiye Saati (UTC+3)
@@ -30,6 +30,33 @@ HEADERS = {
 }
 
 TIMEOUT = 15
+
+# Fenerbahçe A Takım Resmi Oyuncu ve Mevki Haritası
+FB_SQUAD_POSITIONS = {
+    # Kaleciler
+    "GK": [
+        "Dominik Livakovic", "İrfan Can Eğribayat", "Ertuğrul Çetin", 
+        "Livakovic", "İrfan Can", "Ertuğrul"
+    ],
+    # Defans
+    "DF": [
+        "Bright Osayi-Samuel", "Alexander Djiku", "Rodrigo Becao", "Jayden Oosterwolde",
+        "Mert Müldür", "Çağlar Söyüncü", "Samet Akaydin", "Levent Mercan", "Serdar Aziz",
+        "Osayi-Samuel", "Osayi", "Djiku", "Becao", "Oosterwolde", "Çağlar", "Samet"
+    ],
+    # Orta Saha
+    "MF": [
+        "İsmail Yüksek", "Fred", "Sofyan Amrabat", "Sebastian Szymanski", 
+        "Mert Hakan Yandaş", "Bartuğ Elmaz", "İrfan Can Kahveci",
+        "İsmail", "Amrabat", "Szymanski", "Mert Hakan"
+    ],
+    # Forvet / Kanat
+    "FW": [
+        "Dusan Tadic", "Allan Saint-Maximin", "Edin Dzeko", "Youssef En-Nesyri", 
+        "Cenk Tosun", "Cengiz Ünder", "Oğuz Aydın", "Burak Kapacak",
+        "Tadic", "Saint-Maximin", "Dzeko", "En-Nesyri", "Cenk", "Cengiz", "Oğuz"
+    ]
+}
 
 MAIN_TV_CHANNELS = [
     "TRT 1",
@@ -262,7 +289,6 @@ def detect_competition(text):
 
 
 def is_football_match(url, title_text):
-    """Sadece URL ve başlığa bakarak basketbol/voleybol maçlarını eler."""
     combined = f"{url} {title_text}".lower()
     non_football_keywords = [
         "basketbol",
@@ -320,7 +346,6 @@ def parse_match_detail(url):
     title_text = soup.title.get_text(" ", strip=True) if soup.title else ""
     full_text = normalize_text(soup.get_text(" ", strip=True))
 
-    # Branş kontrolü (URL ve Başlığa göre)
     if not is_football_match(url, title_text):
         print(f"[-] Futbol dışı branş atlandı: {url}", flush=True)
         return None
@@ -420,6 +445,44 @@ def get_next_fenerbahce_match():
     return upcoming[0]
 
 
+def fetch_official_lineup(match):
+    """
+    Türk spor kaynaklarından (Mackolik / Sporx / TFF / Fenerbahçe Resmi)
+    resmi maç kadrosunu çeker ve mevkilerine göre gruplar.
+    """
+    print("[*] Resmi kaynaklardan mevki sıralı ilk 11 kontrol ediliyor...", flush=True)
+    opponent = match["away"] if "fenerbahçe" in match["home"].lower() else match["home"]
+    
+    try:
+        query = f"Fenerbahçe {opponent} ilk 11 kadro maçkolik sporx"
+        search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
+        resp = requests.get(search_url, headers=HEADERS, timeout=10)
+        
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            snippets = [s.get_text(" ", strip=True) for s in soup.find_all("a", class_="result__snippet")]
+            combined_text = " ".join(snippets)
+            
+            roles = {"GK": [], "DF": [], "MF": [], "FW": []}
+            found_players = set()
+            
+            for pos, player_list in FB_SQUAD_POSITIONS.items():
+                for player in player_list:
+                    pattern = r"(?<![A-Za-zÇĞİÖŞÜçğıöşü])" + re.escape(player) + r"(?![A-Za-zÇĞİÖŞÜçğıöşü])"
+                    if re.search(pattern, combined_text, flags=re.IGNORECASE):
+                        if player not in found_players:
+                            roles[pos].append(player)
+                            found_players.add(player)
+                            
+            total = sum(len(v) for v in roles.values())
+            if total >= 8 and len(roles["GK"]) >= 1:
+                return roles
+    except Exception as e:
+        print(f"[-] Kadro çekilirken hata: {e}", flush=True)
+
+    return None
+
+
 def create_notification_key(match):
     channels = "|".join(sorted(match["channels"]))
     return (
@@ -431,11 +494,11 @@ def create_notification_key(match):
     )
 
 
-def create_message(match, notification_type="UPCOMING"):
+def create_message(match, notification_type="UPCOMING", lineup=None):
     match_date = date.fromisoformat(match["date"])
 
     if notification_type == "LINEUPS":
-        title = "📋 İLK 11'LER AÇIKLANMAK ÜZERE!"
+        title = "📋 FENERBAHÇEMİZİN İLK 11'İ BELLİ OLDU!"
     elif notification_type == "STARTING_SOON":
         title = "⏳ FENERBAHÇEMİZİN MAÇI BAŞLAMAK ÜZERE!"
     elif notification_type == "MATCH_ENDED":
@@ -450,12 +513,31 @@ def create_message(match, notification_type="UPCOMING"):
     else:
         channel_text = "Henüz belirtilmemiş"
 
+    # Tek satır, virgülle ayrılmış kompakt mevki formatı
+    if notification_type == "LINEUPS" and lineup:
+        gk_text = ", ".join(lineup.get("GK", [])) if lineup.get("GK") else "Açıklanıyor..."
+        df_text = ", ".join(lineup.get("DF", [])) if lineup.get("DF") else "Açıklanıyor..."
+        mf_text = ", ".join(lineup.get("MF", [])) if lineup.get("MF") else "Açıklanıyor..."
+        fw_text = ", ".join(lineup.get("FW", [])) if lineup.get("FW") else "Açıklanıyor..."
+
+        return (
+            f"📅 <b>{title}</b>\n\n"
+            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"🏆 <i>{match['competition']}</i>\n"
+            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"🧤 <b>Kaleci:</b> {gk_text}\n"
+            f"🛡 <b>Defans:</b> {df_text}\n"
+            f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
+            f"⚡️ <b>Hücum:</b> {fw_text}"
+        )
+
     if notification_type == "MATCH_ENDED":
         return (
             f"📅 <b>{title}</b>\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n\n"
-            f"🟡🔵 Maç tamamlandı! Skor ve maç sonu detaylarını aşağıdaki butondan inceleyebilirsiniz."
+            f"🟡🔵 Karşılaşma tamamlandı! Skor ve maç sonu özetini aşağıdaki butondan inceleyebilirsiniz."
         )
 
     return (
@@ -506,7 +588,6 @@ def check_and_notify():
     channel_log = ", ".join(match["channels"]) if match["channels"] else "Belirtilmemiş"
     print(f"    Kanal: {channel_log}\n    URL: {match['url']}", flush=True)
 
-    # Sıradaki maçın tarihini state'e kaydet
     state["next_match_date"] = match["date"]
 
     base_key = create_notification_key(match)
@@ -523,6 +604,7 @@ def check_and_notify():
 
     notification_type = None
     target_key = None
+    lineup = None
 
     # Bildirim Tetikleme Kuralları:
     # 1. Maç Sonu (Maç başladıktan 110 - 170 dk sonrası)
@@ -533,10 +615,16 @@ def check_and_notify():
     elif is_today and 0 <= time_diff_minutes <= 25:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
-    # 3. İlk 11'ler / 1 saat kala (45 ile 70 dk arası)
-    elif is_today and 45 <= time_diff_minutes <= 70:
-        target_key = f"LINEUPS|{base_key}"
-        notification_type = "LINEUPS"
+    # 3. İlk 11 Kadrosu (45 ile 75 dk arası)
+    elif is_today and 45 <= time_diff_minutes <= 75:
+        lineup = fetch_official_lineup(match)
+        if lineup:
+            target_key = f"LINEUPS|{base_key}"
+            notification_type = "LINEUPS"
+        else:
+            print("[*] Kadrolar henüz açıklanmamış. Bir sonraki 15 dakikalık kontrolde tekrar denenecek.", flush=True)
+            save_state(state)
+            return
     # 4. Maç Günü Sabahı
     elif is_today:
         target_key = f"MATCHDAY|{base_key}"
@@ -554,7 +642,6 @@ def check_and_notify():
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
-    # Buton Hazırlığı
     reply_markup = {
         "inline_keyboard": [
             [
@@ -563,7 +650,7 @@ def check_and_notify():
         ]
     }
 
-    message = create_message(match, notification_type=notification_type)
+    message = create_message(match, notification_type=notification_type, lineup=lineup)
     success = send_telegram_message(message, reply_markup=reply_markup)
 
     if not success:
