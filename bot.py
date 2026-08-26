@@ -413,15 +413,16 @@ def get_next_fenerbahce_match():
         print("[-] Yaklaşan Fenerbahçe futbol maçı bulunamadı.", flush=True)
         return None
 
-    today = datetime.now(TURKEY_TZ).date()
+    now_tr = datetime.now(TURKEY_TZ)
     upcoming = []
 
     for match in matches:
         try:
-            match_date = date.fromisoformat(match["date"])
+            match_dt = datetime.strptime(f"{match['date']} {match['time']}", "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
         except ValueError:
             continue
-        if match_date >= today:
+        # Başlamasının üzerinden en fazla 4 saat geçmiş veya gelecekteki maçları al
+        if match_dt >= now_tr - timedelta(hours=4):
             upcoming.append(match)
 
     if not upcoming:
@@ -433,9 +434,6 @@ def get_next_fenerbahce_match():
 
 
 def get_live_match_data(match):
-    """
-    Canlı maç merkezinden resmi kadroyu ve maç durumunu çeker.
-    """
     try:
         team_url = "https://www.fotmob.com/api/teams?id=8695"
         resp = requests.get(team_url, headers=HEADERS, timeout=10)
@@ -469,23 +467,22 @@ def get_live_match_data(match):
 
         m_data = m_resp.json()
         
-        # 1. Maç Durumu ve Skor Kontrolü
+        # 1. Maç Durumu ve Skor
         header = m_data.get("header", {})
         status_info = header.get("status", {})
         is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
         
         score_text = None
-        if is_finished:
-            teams = header.get("teams", [])
-            if len(teams) >= 2:
-                home_team = teams[0].get("name", match["home"])
-                home_score = teams[0].get("score", "")
-                away_team = teams[1].get("name", match["away"])
-                away_score = teams[1].get("score", "")
-                if home_score != "" and away_score != "":
-                    score_text = f"{home_team} {home_score} - {away_score} {away_team}"
+        teams = header.get("teams", [])
+        if len(teams) >= 2:
+            home_team = teams[0].get("name", match["home"])
+            home_score = teams[0].get("score", "")
+            away_team = teams[1].get("name", match["away"])
+            away_score = teams[1].get("score", "")
+            if home_score != "" and away_score != "":
+                score_text = f"{home_team} {home_score} - {away_score} {away_team}"
 
-        # 2. Dinamik Kadro ve Mevki Çekimi
+        # 2. Dinamik Kadro
         content = m_data.get("content", {})
         lineup_data = content.get("lineup", {})
         is_home = "fenerbahçe" in match["home"].lower()
@@ -610,24 +607,13 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
-    next_match_date = state.get("next_match_date")
-    if now_tr.hour >= 11 and next_match_date and next_match_date != today_str:
-        print(f"[*] Bugün ({today_str}) maç günü değil. Sıradaki maç tarihi: {next_match_date}", flush=True)
-        print("[*] Web sitesi taranmayacak. İşlem 1 saniyede tamamlandı.", flush=True)
-        print("=" * 60, flush=True)
-        return
-
     match = get_next_fenerbahce_match()
     if not match:
         print("[-] İşlenecek maç bulunamadı veya ayrıştırma hatası.", flush=True)
-        if now_tr.hour < 11 and "PARSING_ERROR" not in state.get("notified_matches", []):
-            send_telegram_message("⚠️ <b>Bot Uyarısı:</b> Fikstürdeki maç ayrıştırılamadı. Sayfa yapısı değişmiş olabilir.")
-            state.setdefault("notified_matches", []).append("PARSING_ERROR")
-            save_state(state)
         return
 
     print(
-        f"\n[+] Yaklaşan maç:\n"
+        f"\n[+] İncelenen maç:\n"
         f"    {match['home']} - {match['away']}\n"
         f"    Tarih: {match['date']}\n"
         f"    Saat: {match['time']}\n"
@@ -638,8 +624,6 @@ def check_and_notify():
     channel_log = ", ".join(match["channels"]) if match["channels"] else "Belirtilmemiş"
     print(f"    Kanal (Öncelikli): {channel_log}\n    URL: {match['url']}", flush=True)
 
-    state["next_match_date"] = match["date"]
-
     base_key = create_notification_key(match)
     notified_matches = state.get("notified_matches", [])
 
@@ -647,37 +631,36 @@ def check_and_notify():
     match_dt = datetime.strptime(match_dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
 
     time_diff_minutes = (match_dt - now_tr).total_seconds() / 60
-    is_today = (match["date"] == today_str)
 
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
-    print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
+    print(f"[*] Maç başlangıcına göre fark: {time_diff_minutes:.1f} dakika", flush=True)
 
     notification_type = None
     target_key = None
     lineup = None
     final_score = None
 
-    # Canlı Maç Verilerini Al
+    # Maç başladıktan sonra veya maça 45 dk kala canlı veriyi çek
     lineup_data, is_match_finished, score_data = (None, False, None)
-    if is_today and time_diff_minutes <= 45:
+    if -300 <= time_diff_minutes <= 45:
         lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
-    is_fallback_ended = (time_diff_minutes <= -170)
+    is_fallback_ended = (time_diff_minutes <= -160)
 
-    # 1. Maç Sonu
-    if is_today and ((time_diff_minutes <= -85 and is_match_finished) or is_fallback_ended):
+    # 1. Maç Sonu (Maç bitmişse VEYA süre dolmuşsa - Gece yarısı gün değişiminden bağımsız)
+    if time_diff_minutes <= -85 and (is_match_finished or is_fallback_ended):
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         final_score = score_data
 
-    # 2. Maça Başlamak Üzere & İlk 11 (Maça 0 - 15 dk kala tek birleşik mesaj)
-    elif is_today and 0 <= time_diff_minutes <= 15:
+    # 2. Maça Başlamak Üzere & İlk 11 (0 - 15 dk kala)
+    elif 0 <= time_diff_minutes <= 15:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
 
     # 3. Maç Günü Sabahı
-    elif is_today:
+    elif match["date"] == today_str:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
 
