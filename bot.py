@@ -31,7 +31,7 @@ HEADERS = {
 
 TIMEOUT = 15
 
-# Türkiye Resmi / Esas Yayıncı Öncelik Sıralaması (En üstteki en önce yazılır)
+# Türkiye Resmi / Esas Yayıncı Öncelik Sıralaması
 CHANNEL_PRIORITY = [
     # Türkiye Ulusal & Açık Kanallar
     "TRT 1",
@@ -203,12 +203,11 @@ def canonical_channel_name(channel):
 
 
 def sort_channels_by_priority(channels):
-    """Kanalları Türkiye esas yayıncı önceliğine göre sıralar."""
     def get_priority(ch):
         try:
             return CHANNEL_PRIORITY.index(ch)
         except ValueError:
-            return 999  # Bilinmeyen kanallar en sona
+            return 999
     return sorted(channels, key=get_priority)
 
 
@@ -224,7 +223,6 @@ def detect_channels(text):
             if canonical not in detected:
                 detected.append(canonical)
     
-    # Esas kanal en başa gelecek şekilde öncelik sıralaması uygula
     return sort_channels_by_priority(detected)
 
 
@@ -458,9 +456,6 @@ def get_next_fenerbahce_match():
 
 
 def fetch_official_lineup(match):
-    """
-    Türk spor kaynaklarından resmi maç kadrosunu çeker ve mevkilerine göre gruplar.
-    """
     print("[*] Resmi kaynaklardan mevki sıralı ilk 11 kontrol ediliyor...", flush=True)
     opponent = match["away"] if "fenerbahçe" in match["home"].lower() else match["home"]
     
@@ -492,6 +487,21 @@ def fetch_official_lineup(match):
         print(f"[-] Kadro çekilirken hata: {e}", flush=True)
 
     return None
+
+
+def get_highlights_url(match):
+    """Maçın yayınlandığı turnuvaya göre resmi YouTube özet arama linki üretir."""
+    competition = match.get("competition", "")
+    home = match.get("home", "")
+    away = match.get("away", "")
+    
+    if "Süper Lig" in competition or "Türkiye Kupası" in competition:
+        search_query = f"{home} {away} maç özeti beIN SPORTS Türkiye"
+    else:
+        search_query = f"{home} {away} maç özeti TRT Spor Tabii Spor"
+        
+    encoded_query = requests.utils.quote(search_query)
+    return f"https://www.youtube.com/results?search_query={encoded_query}"
 
 
 def create_notification_key(match):
@@ -545,7 +555,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None):
             f"🏁 💛 <b>MAÇ SONA ERDİ!</b> 💙 🎉\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n\n"
-            f"🟡🔵 Karşılaşma tamamlandı! Skor ve maç sonu detaylarını aşağıdaki butondan inceleyebilirsiniz."
+            f"🟡🔵 Karşılaşma tamamlandı! Maçın geniş özeti ve gollerini aşağıdaki butondan izleyebilirsiniz."
         )
 
     # 4. Sabah / Günlük Bildirim (MATCHDAY)
@@ -662,13 +672,19 @@ def check_and_notify():
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
-    reply_markup = {
-        "inline_keyboard": [
-            [
-                {"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}
-            ]
-        ]
-    }
+    # Buton Yapılandırması (1. ve 4. bildirimde maç detay butonu kaldırıldı)
+    keyboard_buttons = []
+
+    # 4. Bildirim (Maç Sonu): Sadece özet butonu ekle
+    if notification_type == "MATCH_ENDED":
+        highlights_url = get_highlights_url(match)
+        keyboard_buttons.append([{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}])
+    # 2. Bildirim (Kadro), 3. Bildirim (15 Dk Kala) ve 5. Bildirim (Gelecek Maç): Maç Detayı Butonu ekle
+    elif notification_type in ("LINEUPS", "STARTING_SOON", "UPCOMING"):
+        keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
+    # 1. Bildirim (MATCHDAY / Sabah): Buton eklenmez (boş kalır)
+
+    reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
 
     message = create_message(match, notification_type=notification_type, lineup=lineup)
     success = send_telegram_message(message, reply_markup=reply_markup)
