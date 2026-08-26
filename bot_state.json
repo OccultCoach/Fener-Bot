@@ -1,5 +1,12 @@
 {
-  "notified_matches": [
-    "2026-08-30|21:30|Samsunspor|Fenerbahçe|beIN Sports 1"
-  ]
+  "notified_matches": [],
+  "active_match": {
+    "home": "Olympique Lyon",
+    "away": "Fenerbahçe",
+    "date": "2026-08-26",
+    "time": "22:00",
+    "competition": "UEFA Şampiyonlar Ligi Play-Off",
+    "channels": ["TRT 1", "Tabii Spor", "CBC Sport"],
+    "url": "https://www.sporekrani.com/home/team/fenerbahce/"
+  }
 }
