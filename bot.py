@@ -31,7 +31,7 @@ HEADERS = {
 
 TIMEOUT = 15
 
-# Türkiye Resmi / Esas Yayıncı Öncelik Sıralaması
+# Türkiye Yayıncı Öncelik Sıralaması
 CHANNEL_PRIORITY = [
     "TRT 1", "TRT Spor", "TRT Spor Yıldız", "TV8,5", "TV8.5", "TV8", "ATV", "A Spor",
     "Tabii Spor", "Tabii", "beIN Sports 1", "beIN Sports 2", "beIN Sports 3", "beIN Sports 4",
@@ -101,7 +101,10 @@ def send_telegram_message(message, reply_markup=None):
 
 
 def load_state():
-    default_state = {"notified_matches": []}
+    default_state = {
+        "notified_matches": [],
+        "active_match": None,
+    }
     if not os.path.exists(STATE_FILE):
         return default_state
     try:
@@ -110,6 +113,7 @@ def load_state():
         if not isinstance(state, dict):
             return default_state
         state.setdefault("notified_matches", [])
+        state.setdefault("active_match", None)
         return state
     except Exception as e:
         print(f"[-] State dosyası okunamadı: {e}", flush=True)
@@ -353,96 +357,6 @@ def get_upcoming_matches_from_web():
     return matches
 
 
-def collect_fotmob_fixtures(obj, found_matches=None):
-    """JSON içindeki tüm fikstür ve maç objelerini özyinelemeli toplar."""
-    if found_matches is None:
-        found_matches = []
-    if isinstance(obj, dict):
-        if "id" in obj and ("utcTime" in obj.get("status", {}) or "home" in obj):
-            found_matches.append(obj)
-        for v in obj.values():
-            collect_fotmob_fixtures(v, found_matches)
-    elif isinstance(obj, list):
-        for item in obj:
-            collect_fotmob_fixtures(item, found_matches)
-    return found_matches
-
-
-def get_fotmob_all_matches():
-    try:
-        team_url = "https://www.fotmob.com/api/teams?id=8695"
-        resp = requests.get(team_url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            print(f"[-] FotMob API yanıt vermedi: HTTP {resp.status_code}", flush=True)
-            return []
-
-        data = resp.json()
-        raw_matches = collect_fotmob_fixtures(data)
-        
-        unique = {}
-        for m in raw_matches:
-            m_id = m.get("id")
-            if m_id and m_id not in unique:
-                unique[m_id] = m
-        print(f"[+] FotMob'dan toplam {len(unique)} adet maç verisi tarandı.", flush=True)
-        return list(unique.values())
-    except Exception as e:
-        print(f"[-] FotMob maç listesi alınamadı: {e}", flush=True)
-        return []
-
-
-def get_fotmob_match_details(match_id):
-    try:
-        detail_url = f"https://www.fotmob.com/api/matchDetails?matchId={match_id}"
-        resp = requests.get(detail_url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            return None, False, None
-
-        m_data = resp.json()
-        header = m_data.get("header", {})
-        status_info = header.get("status", {})
-        is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
-        
-        score_text = None
-        teams = header.get("teams", [])
-        if len(teams) >= 2:
-            home_team = teams[0].get("name", "")
-            home_score = teams[0].get("score", "")
-            away_team = teams[1].get("name", "")
-            away_score = teams[1].get("score", "")
-            if home_score != "" and away_score != "":
-                score_text = f"{home_team} {home_score} - {away_score} {away_team}"
-
-        # Kadro
-        content = m_data.get("content", {})
-        lineup_data = content.get("lineup", {})
-        lineup_roles = None
-        
-        if lineup_data and lineup_data.get("lineup"):
-            home_name = teams[0].get("name", "").lower() if teams else ""
-            is_fb_home = "fenerbah" in home_name
-            team_lineup = lineup_data.get("lineup", [])[0 if is_fb_home else 1]
-
-            if team_lineup and team_lineup.get("players"):
-                roles = {"GK": [], "DF": [], "MF": [], "FW": []}
-                for row in team_lineup.get("players", []):
-                    for p in row:
-                        name = p.get("name", {}).get("fullName") or p.get("name", {}).get("lastName", "")
-                        role = p.get("role", "MF")
-                        if role in roles:
-                            roles[role].append(name)
-                        else:
-                            roles["MF"].append(name)
-
-                if sum(len(v) for v in roles.values()) == 11:
-                    lineup_roles = roles
-
-        return lineup_roles, is_finished, score_text
-    except Exception as e:
-        print(f"[-] FotMob maç detayı alınamadı: {e}", flush=True)
-        return None, False, None
-
-
 def get_highlights_url(match):
     competition = match.get("competition", "")
     home = match.get("home", "")
@@ -469,29 +383,14 @@ def create_notification_key(match):
     )
 
 
-def create_message(match, notification_type="UPCOMING", lineup=None, score=None):
+def create_message(match, notification_type="UPCOMING", score=None):
     match_date = date.fromisoformat(match["date"])
     channel_text = " / ".join(match["channels"]) if match.get("channels") else "Henüz belirtilmemiş"
 
-    # 1. Maça Başlamak Üzere & İlk 11 (Birleşik Mesaj)
+    # 1. Maça Başlamak Üzere (10-15 Dk Kala)
     if notification_type == "STARTING_SOON":
-        lineup_block = ""
-        if lineup:
-            gk_text = ", ".join(lineup.get("GK", []))
-            df_text = ", ".join(lineup.get("DF", []))
-            mf_text = ", ".join(lineup.get("MF", []))
-            fw_text = ", ".join(lineup.get("FW", []))
-            lineup_block = (
-                f"📋 <b>İLK 11'İMİZ:</b>\n"
-                f"🧤 <b>Kaleci:</b> {gk_text}\n"
-                f"🛡 <b>Defans:</b> {df_text}\n"
-                f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
-                f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
-            )
-
         return (
             f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
-            f"{lineup_block}"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
             f"⏰ <b>Saat:</b> {match['time']}\n"
@@ -499,7 +398,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"💛💙 <i>Haydi Fenerbahçeli! Ekran başına geçme zamanı.</i>"
         )
 
-    # 2. Maç Sona Erdiğinde (Nihai Skorlu)
+    # 2. Maç Sona Erdiğinde
     if notification_type == "MATCH_ENDED":
         match_title = score if score else f"{match['home']} - {match['away']}"
         return (
@@ -541,62 +440,30 @@ def check_and_notify():
     state = load_state()
     notified_matches = state.get("notified_matches", [])
 
-    # ADIM 1: FotMob üzerinden son biten maç kontrolü
-    fotmob_matches = get_fotmob_all_matches()
-    for fix in fotmob_matches:
-        status_info = fix.get("status", {})
-        fix_utc_str = status_info.get("utcTime", "")
-        if not fix_utc_str:
-            continue
-        try:
-            utc_dt = datetime.fromisoformat(fix_utc_str.replace("Z", "+00:00"))
-            match_dt = utc_dt.astimezone(TURKEY_TZ)
-        except Exception:
-            continue
+    # 1. Hafızadaki aktif maçı kontrol et
+    active_match = state.get("active_match")
 
-        time_diff = (match_dt - now_tr).total_seconds() / 60
-        
-        # Son 5 saat içinde başlamış bir maç var mı?
-        if -300 <= time_diff <= 0:
-            match_id = fix.get("id")
-            lineup_data, is_finished, score_data = get_fotmob_match_details(match_id)
-            
-            home_name = fix.get("home", {}).get("name", "Ev Sahibi")
-            away_name = fix.get("away", {}).get("name", "Deplasman")
-            comp_name = fix.get("tournament", {}).get("name", "Futbol Müsabakası")
+    # Eğer hafızada aktif maç yoksa, Spor Ekranı'ndan sıradaki maçı çek
+    if not active_match:
+        web_matches = get_upcoming_matches_from_web()
+        if web_matches:
+            target_candidate = web_matches[0]
+            # Eğer maç bugünse veya başlangıcına 2 saatten az varsa aktif maç olarak bağla
+            cand_dt = datetime.strptime(f"{target_candidate['date']} {target_candidate['time']}", "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
+            diff = (cand_dt - now_tr).total_seconds() / 60
+            if target_candidate["date"] == today_str or -200 <= diff <= 120:
+                active_match = target_candidate
+                state["active_match"] = active_match
+                save_state(state)
+            else:
+                # Gelecek bir tarihteki maç
+                active_match = target_candidate
 
-            recent_match = {
-                "home": home_name,
-                "away": away_name,
-                "date": match_dt.date().isoformat(),
-                "time": match_dt.strftime("%H:%M"),
-                "competition": comp_name,
-                "channels": [],
-                "url": BASE_URL,
-            }
-            ended_key = f"ENDED|{recent_match['date']}|{recent_match['time']}|{recent_match['home']}|{recent_match['away']}"
-            
-            if is_finished and ended_key not in notified_matches:
-                print(f"[+] Son biten maç tespit edildi: {home_name} vs {away_name}", flush=True)
-                msg = create_message(recent_match, notification_type="MATCH_ENDED", score=score_data)
-                highlights_url = get_highlights_url(recent_match)
-                reply_markup = {"inline_keyboard": [[{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}]]}
-                
-                success = send_telegram_message(msg, reply_markup=reply_markup)
-                if success:
-                    notified_matches.append(ended_key)
-                    state["notified_matches"] = notified_matches[-100:]
-                    save_state(state)
-                    print("[+] Maç sonu bildirimi gönderildi ve kaydedildi.\n" + "=" * 60, flush=True)
-                    return
-
-    # ADIM 2: Yaklaşan Maç Kontrolü (Sporekrani.com)
-    web_matches = get_upcoming_matches_from_web()
-    if not web_matches:
-        print("[-] Fikstürde yaklaşan maç bulunamadı.", flush=True)
+    if not active_match:
+        print("[-] Fikstürde incelenecek maç bulunamadı.", flush=True)
         return
 
-    match = web_matches[0]
+    match = active_match
     print(
         f"\n[+] İncelenen maç:\n"
         f"    {match['home']} - {match['away']}\n"
@@ -606,7 +473,7 @@ def check_and_notify():
         flush=True,
     )
 
-    channel_log = ", ".join(match["channels"]) if match["channels"] else "Belirtilmemiş"
+    channel_log = ", ".join(match["channels"]) if match.get("channels") else "Belirtilmemiş"
     print(f"    Kanal: {channel_log}\n    URL: {match['url']}", flush=True)
 
     base_key = create_notification_key(match)
@@ -617,22 +484,32 @@ def check_and_notify():
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maç başlangıcına göre fark: {time_diff_minutes:.1f} dakika", flush=True)
 
-    # 1. Maça Başlamak Üzere & İlk 11 (0 - 15 dk kala)
-    if 0 <= time_diff_minutes <= 15:
+    notification_type = None
+    target_key = None
+
+    # KURAL 1: Maç Bitişi (Maç başladıktan en az 110 dakika sonra - Gece yarısı geçse de çalışır)
+    if time_diff_minutes <= -110:
+        target_key = f"ENDED|{base_key}"
+        notification_type = "MATCH_ENDED"
+        # Bittiği için aktif maç kilidini kaldır
+        state["active_match"] = None
+
+    # KURAL 2: Maça 10-15 Dk Kala (0 - 15 dk aralığı)
+    elif 0 <= time_diff_minutes <= 15:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
-        lineup_data, _, _ = get_fotmob_match_details(match.get("id"))
-        lineup = lineup_data
-    # 2. Maç Günü Sabahı
+        state["active_match"] = match
+
+    # KURAL 3: Maç Günü Sabah Bildirimi
     elif match["date"] == today_str:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
-        lineup = None
-    # 3. Gelecek Yaklaşan Maç
+        state["active_match"] = match
+
+    # KURAL 4: Gelecek Maç Duyurusu
     else:
         target_key = base_key
         notification_type = "UPCOMING"
-        lineup = None
 
     if target_key in notified_matches:
         print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}).\n[*] Yeni Telegram bildirimi gönderilmeyecek.", flush=True)
@@ -643,11 +520,14 @@ def check_and_notify():
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
     keyboard_buttons = []
-    if notification_type in ("STARTING_SOON", "UPCOMING"):
+    if notification_type == "MATCH_ENDED":
+        highlights_url = get_highlights_url(match)
+        keyboard_buttons.append([{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}])
+    elif notification_type in ("STARTING_SOON", "UPCOMING"):
         keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
-    message = create_message(match, notification_type=notification_type, lineup=lineup)
+    message = create_message(match, notification_type=notification_type)
     success = send_telegram_message(message, reply_markup=reply_markup)
 
     if success:
