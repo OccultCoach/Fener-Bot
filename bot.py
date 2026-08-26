@@ -261,11 +261,18 @@ def detect_competition(text):
     return "Futbol Müsabakası"
 
 
-def is_football_match(full_text):
-    """Basketbol, voleybol gibi diğer branşları kesin olarak eler."""
-    lower_text = full_text.lower()
-    other_sports = ["basketbol", "euroleague", "voleybol", "sultanlar", "efeler", "tarfin"]
-    if any(sport in lower_text for sport in other_sports):
+def is_football_match(url, title_text):
+    """Sadece URL ve başlığa bakarak basketbol/voleybol maçlarını eler."""
+    combined = f"{url} {title_text}".lower()
+    non_football_keywords = [
+        "basketbol",
+        "euroleague",
+        "voleybol",
+        "sultanlar-ligi",
+        "efeler-ligi",
+        "kadinlar-basketbol",
+    ]
+    if any(keyword in combined for keyword in non_football_keywords):
         return False
     return True
 
@@ -310,9 +317,11 @@ def parse_match_detail(url):
         return None
 
     soup = BeautifulSoup(html, "html.parser")
+    title_text = soup.title.get_text(" ", strip=True) if soup.title else ""
     full_text = normalize_text(soup.get_text(" ", strip=True))
 
-    if not is_football_match(full_text):
+    # Branş kontrolü (URL ve Başlığa göre)
+    if not is_football_match(url, title_text):
         print(f"[-] Futbol dışı branş atlandı: {url}", flush=True)
         return None
 
@@ -469,7 +478,6 @@ def check_and_notify():
     state = load_state()
 
     # Gün içi tasarruf kontrolü (Sabah 09:30 harici):
-    # Eğer sabahki taramada sıradaki maçın bugün olmadığı kesinleştiyse, web sitesine istek atmadan hemen çık.
     next_match_date = state.get("next_match_date")
     if now_tr.hour >= 11 and next_match_date and next_match_date != today_str:
         print(f"[*] Bugün ({today_str}) maç günü değil. Sıradaki maç tarihi: {next_match_date}", flush=True)
@@ -516,7 +524,7 @@ def check_and_notify():
     notification_type = None
     target_key = None
 
-    # Bildirim Tetikleme Kuralları (Genişletilmiş ve güvenli tolerans aralıkları):
+    # Bildirim Tetikleme Kuralları:
     # 1. Maç Sonu (Maç başladıktan 110 - 170 dk sonrası)
     if is_today and -170 <= time_diff_minutes <= -110:
         target_key = f"ENDED|{base_key}"
@@ -546,7 +554,7 @@ def check_and_notify():
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
-    # Telegram Butonu (Inline Keyboard)
+    # Buton Hazırlığı
     reply_markup = {
         "inline_keyboard": [
             [
