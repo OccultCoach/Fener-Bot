@@ -28,7 +28,8 @@ HEADERS = {
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-TIMEOUT = 15
+# Proxy sunucular için süreyi artırdık
+TIMEOUT = 35
 
 CHANNEL_PRIORITY = [
     "TRT 1", "TRT Spor", "TRT Spor Yıldız", "TV8,5", "TV8.5", "TV8", "ATV", "A Spor",
@@ -345,34 +346,39 @@ def get_upcoming_matches_from_web():
 
 
 def get_recent_completed_match_from_espn():
-    """ESPN API 403 hatası verdiği için proxy üzerinden istek atar."""
+    """Proxy gecikmelerini aşmak için timeout uzatıldı ve çoklu bypass mimarisi kuruldu."""
     base_url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/436/schedule"
     encoded_url = urllib.parse.quote(base_url, safe='')
     
-    # 403 engelini aşmak için proxy listesi
-    proxy_urls = [
-        f"https://api.allorigins.win/raw?url={encoded_url}",
-        f"https://api.codetabs.com/v1/proxy?quest={encoded_url}",
-        base_url  # Son çare orijinal URL
+    proxies = [
+        (f"https://api.allorigins.win/get?url={encoded_url}", "allorigins_get"),
+        (f"https://corsproxy.io/?url={encoded_url}", "corsproxy"),
+        (f"https://api.allorigins.win/raw?url={encoded_url}", "allorigins_raw"),
+        (base_url, "direct")
     ]
-
-    for url in proxy_urls:
-        print(f"[*] ESPN verisi taranıyor: {url[:50]}...", flush=True)
+    
+    for url, p_type in proxies:
+        print(f"[*] ESPN API taranıyor [{p_type}]: {url[:60]}...", flush=True)
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=15)
+            # Proxy sunucularının veriyi okuması uzun sürebilir, timeout=35 yapıldı
+            resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
             print(f"[*] HTTP Yanıt Kodu: {resp.status_code}", flush=True)
             
             if resp.status_code == 200:
                 try:
-                    data = resp.json()
+                    if p_type == "allorigins_get":
+                        data = json.loads(resp.json()["contents"])
+                    else:
+                        data = resp.json()
                 except Exception:
-                    print("[-] JSON dönüştürme hatası. Proxy sayfa dönmüş olabilir.", flush=True)
                     continue
-
+                    
                 events = data.get("events", [])
-                print(f"[*] Başarılı! {len(events)} maç çekildi.", flush=True)
+                if not events:
+                    continue
+                    
+                print(f"[*] Başarılı! {len(events)} maç verisi çekildi.", flush=True)
                 
-                # Fikstürü sondan başa doğru tara
                 for ev in reversed(events):
                     status = ev.get("status", {}).get("type", {})
                     if status.get("completed", False):
@@ -404,7 +410,8 @@ def get_recent_completed_match_from_espn():
                                 "dt": ev_dt
                             }
         except Exception as e:
-            print(f"[-] Ağ Hatası: {e}", flush=True)
+            print(f"[-] Ağ/Proxy Hatası ({p_type}): {e}", flush=True)
+            
     return None
 
 
