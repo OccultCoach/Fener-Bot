@@ -1,12 +1,6 @@
 {
-  "notified_matches": [],
-  "active_match": {
-    "home": "Olympique Lyon",
-    "away": "Fenerbahçe",
-    "date": "2026-08-26",
-    "time": "22:00",
-    "competition": "UEFA Şampiyonlar Ligi Play-Off",
-    "channels": ["TRT 1", "Tabii Spor", "CBC Sport"],
-    "url": "https://www.sporekrani.com/home/team/fenerbahce/"
-  }
+  "notified_matches": [
+    "ENDED|2026-08-26|22:00|Olympique Lyon|Fenerbahçe|TRT 1|Tabii Spor|CBC Sport"
+  ],
+  "active_match": null
 }
