@@ -565,7 +565,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"📺 <b>Kanal:</b> {channel_text}"
         )
 
-    # 2. Maça Başlamak Üzere (0-30 dk kala)
+    # 2. Maça Başlamak Üzere
     if notification_type == "STARTING_SOON":
         return (
             f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
@@ -665,26 +665,23 @@ def check_and_notify():
     lineup = None
     final_score = None
 
-    # Canlı Maç Verilerini Al
+    # Canlı Maç Verilerini Al (Maça 80 dk kala başlar)
     lineup_data, is_match_finished, score_data = (None, False, None)
-    if is_today and time_diff_minutes <= 75:
+    if is_today and time_diff_minutes <= 80:
         lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
     # 1.3 Güvenlik Ağı (Fallback)
     is_fallback_ended = (time_diff_minutes <= -170)
 
-    # Bildirim Tetikleme Kuralları:
+    # BİLDİRİM KURALLARI
     # 1. Maç Sonu
     if is_today and ((time_diff_minutes <= -85 and is_match_finished) or is_fallback_ended):
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         final_score = score_data
-    # 2. Maça Başlamak Üzere (0 ile 30 dk arası)
-    elif is_today and 0 <= time_diff_minutes <= 30:
-        target_key = f"SOON|{base_key}"
-        notification_type = "STARTING_SOON"
-    # 3. İlk 11 Kadrosu (30 ile 75 dk arası dinamik tespit)
-    elif is_today and 30 <= time_diff_minutes <= 75:
+
+    # 2. İlk 11 Kadrosu (Maça 75 ile 35 dk kala dinamik kontrol)
+    elif is_today and 35 <= time_diff_minutes <= 75:
         if lineup_data:
             target_key = f"LINEUPS|{base_key}"
             notification_type = "LINEUPS"
@@ -693,10 +690,17 @@ def check_and_notify():
             print("[*] Kadrolar henüz açıklanmamış. Bir sonraki kontrolde tekrar denenecek.", flush=True)
             save_state(state)
             return
+
+    # 3. Maça Başlamak Üzere (Maça 35 dk ile 0 dk kala)
+    elif is_today and 0 <= time_diff_minutes < 35:
+        target_key = f"SOON|{base_key}"
+        notification_type = "STARTING_SOON"
+
     # 4. Maç Günü Sabahı
     elif is_today:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
+
     # 5. Gelecek Yaklaşan Maç
     else:
         target_key = base_key
