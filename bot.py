@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
 
-# Logların anında GitHub Actions konsoluna dökülmesi için
+# Logların anında görünmesi için
 sys.stdout.reconfigure(line_buffering=True)
 
 # Türkiye Saati (UTC+3)
@@ -68,29 +68,6 @@ CHANNEL_PRIORITY = [
     # Yabancı / Uydu Yayıncılar
     "CBC Sport",
 ]
-
-# Fenerbahçe A Takım Resmi Oyuncu ve Mevki Haritası
-FB_SQUAD_POSITIONS = {
-    "GK": [
-        "Dominik Livakovic", "İrfan Can Eğribayat", "Ertuğrul Çetin", 
-        "Livakovic", "İrfan Can", "Ertuğrul"
-    ],
-    "DF": [
-        "Bright Osayi-Samuel", "Alexander Djiku", "Rodrigo Becao", "Jayden Oosterwolde",
-        "Mert Müldür", "Çağlar Söyüncü", "Samet Akaydin", "Levent Mercan", "Serdar Aziz",
-        "Osayi-Samuel", "Osayi", "Djiku", "Becao", "Oosterwolde", "Çağlar", "Samet"
-    ],
-    "MF": [
-        "İsmail Yüksek", "Fred", "Sofyan Amrabat", "Sebastian Szymanski", 
-        "Mert Hakan Yandaş", "Bartuğ Elmaz", "İrfan Can Kahveci",
-        "İsmail", "Amrabat", "Szymanski", "Mert Hakan"
-    ],
-    "FW": [
-        "Dusan Tadic", "Allan Saint-Maximin", "Edin Dzeko", "Youssef En-Nesyri", 
-        "Cenk Tosun", "Cengiz Ünder", "Oğuz Aydın", "Burak Kapacak",
-        "Tadic", "Saint-Maximin", "Dzeko", "En-Nesyri", "Cenk", "Cengiz", "Oğuz"
-    ]
-}
 
 
 def normalize_text(text):
@@ -455,42 +432,68 @@ def get_next_fenerbahce_match():
     return upcoming[0]
 
 
-def fetch_official_lineup(match):
-    print("[*] Resmi kaynaklardan mevki sıralı ilk 11 kontrol ediliyor...", flush=True)
-    opponent = match["away"] if "fenerbahçe" in match["home"].lower() else match["home"]
-    
+def get_live_match_data(match):
+    """
+    Canlı maç merkezinden hem resmi kadroyu (mevkileriyle)
+    hem de maçın canlı durumunu (Başladı mı / Bitti mi) dinamik olarak çeker.
+    """
     try:
-        query = f"Fenerbahçe {opponent} ilk 11 kadro maçkolik sporx"
-        search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
-        resp = requests.get(search_url, headers=HEADERS, timeout=10)
-        
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            snippets = [s.get_text(" ", strip=True) for s in soup.find_all("a", class_="result__snippet")]
-            combined_text = " ".join(snippets)
-            
-            roles = {"GK": [], "DF": [], "MF": [], "FW": []}
-            found_players = set()
-            
-            for pos, player_list in FB_SQUAD_POSITIONS.items():
-                for player in player_list:
-                    pattern = r"(?<![A-Za-zÇĞİÖŞÜçğıöşü])" + re.escape(player) + r"(?![A-Za-zÇĞİÖŞÜçğıöşü])"
-                    if re.search(pattern, combined_text, flags=re.IGNORECASE):
-                        if player not in found_players:
-                            roles[pos].append(player)
-                            found_players.add(player)
-                            
-            total = sum(len(v) for v in roles.values())
-            if total >= 8 and len(roles["GK"]) >= 1:
-                return roles
-    except Exception as e:
-        print(f"[-] Kadro çekilirken hata: {e}", flush=True)
+        team_url = "https://www.fotmob.com/api/teams?id=8695"
+        resp = requests.get(team_url, headers=HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return None, False
 
-    return None
+        fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
+        match_id = None
+        for fix in fixtures:
+            fix_time = fix.get("status", {}).get("utcTime", "")
+            if fix_time.startswith(match["date"]):
+                match_id = fix.get("id")
+                break
+
+        if not match_id:
+            return None, False
+
+        detail_url = f"https://www.fotmob.com/api/matchDetails?matchId={match_id}"
+        m_resp = requests.get(detail_url, headers=HEADERS, timeout=10)
+        if m_resp.status_code != 200:
+            return None, False
+
+        m_data = m_resp.json()
+        
+        # 1. Maç Durumu Kontrolü (Hakem bitiş düdüğünü çaldı mı?)
+        status_info = m_data.get("header", {}).get("status", {})
+        is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
+
+        # 2. Dinamik Kadro ve Mevki Çekimi
+        content = m_data.get("content", {})
+        lineup_data = content.get("lineup", {})
+        is_home = "fenerbahçe" in match["home"].lower()
+        team_lineup = lineup_data.get("lineup", [])[0 if is_home else 1] if lineup_data.get("lineup") else None
+
+        lineup_roles = None
+        if team_lineup and team_lineup.get("players"):
+            roles = {"GK": [], "DF": [], "MF": [], "FW": []}
+            for row in team_lineup.get("players", []):
+                for p in row:
+                    name = p.get("name", {}).get("fullName") or p.get("name", {}).get("lastName", "")
+                    role = p.get("role", "MF")
+                    if role in roles:
+                        roles[role].append(name)
+                    else:
+                        roles["MF"].append(name)
+
+            total_players = sum(len(v) for v in roles.values())
+            if total_players == 11 and len(roles["GK"]) >= 1:
+                lineup_roles = roles
+
+        return lineup_roles, is_finished
+    except Exception as e:
+        print(f"[-] Canlı maç verisi çekilirken hata: {e}", flush=True)
+        return None, False
 
 
 def get_highlights_url(match):
-    """Maçın yayınlandığı turnuvaya göre resmi YouTube özet arama linki üretir."""
     competition = match.get("competition", "")
     home = match.get("home", "")
     away = match.get("away", "")
@@ -636,21 +639,26 @@ def check_and_notify():
     target_key = None
     lineup = None
 
+    # Canlı Maç Verilerini (Dinamik Kadro ve Maç Bitti Bilgisi) Al
+    lineup_data, is_match_finished = (None, False)
+    if is_today and time_diff_minutes <= 75:
+        lineup_data, is_match_finished = get_live_match_data(match)
+
     # Bildirim Tetikleme Kuralları:
-    # 1. Maç Sonu (Maç başladıktan 110 - 170 dk sonrası)
-    if is_today and -170 <= time_diff_minutes <= -110:
+    # 1. Maç Sonu (Hakem maçı bitirdiğinde - süreden bağımsız)
+    if is_today and time_diff_minutes <= -85 and is_match_finished:
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
     # 2. Maça 15 dk kala (0 ile 25 dk arası)
     elif is_today and 0 <= time_diff_minutes <= 25:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
-    # 3. İlk 11 Kadrosu (45 ile 75 dk arası)
+    # 3. İlk 11 Kadrosu (Dinamik olarak açıklandığı an, 45-75 dk arası)
     elif is_today and 45 <= time_diff_minutes <= 75:
-        lineup = fetch_official_lineup(match)
-        if lineup:
+        if lineup_data:
             target_key = f"LINEUPS|{base_key}"
             notification_type = "LINEUPS"
+            lineup = lineup_data
         else:
             print("[*] Kadrolar henüz açıklanmamış. Bir sonraki 15 dakikalık kontrolde tekrar denenecek.", flush=True)
             save_state(state)
@@ -672,9 +680,7 @@ def check_and_notify():
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
-    # Buton Yapılandırması (1. ve 4. bildirimde maç detay butonu kaldırıldı)
     keyboard_buttons = []
-
     # 4. Bildirim (Maç Sonu): Sadece özet butonu ekle
     if notification_type == "MATCH_ENDED":
         highlights_url = get_highlights_url(match)
@@ -682,7 +688,6 @@ def check_and_notify():
     # 2. Bildirim (Kadro), 3. Bildirim (15 Dk Kala) ve 5. Bildirim (Gelecek Maç): Maç Detayı Butonu ekle
     elif notification_type in ("LINEUPS", "STARTING_SOON", "UPCOMING"):
         keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
-    # 1. Bildirim (MATCHDAY / Sabah): Buton eklenmez (boş kalır)
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
 
