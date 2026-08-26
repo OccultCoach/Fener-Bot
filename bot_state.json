@@ -1,6 +1,7 @@
 {
   "notified_matches": [
-    "MATCHDAY|2026-08-26|22:00|Lyon|Fenerbahçe|CBC Sport|TRT 1"
+    "MATCHDAY|2026-08-26|22:00|Lyon|Fenerbahçe|CBC Sport|TRT 1",
+    "PARSING_ERROR"
   ],
   "next_match_date": "2026-08-26"
 }
