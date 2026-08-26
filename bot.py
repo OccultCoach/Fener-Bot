@@ -685,120 +685,57 @@ def create_message(match):
 
 def check_and_notify():
     print("=" * 60)
-    print(
-        "FENERBAHÇE BOTU ÇALIŞIYOR"
-    )
+    print("FENERBAHÇE BOTU ÇALIŞIYOR")
     print("=" * 60)
 
     match = get_next_fenerbahce_match()
-
     if not match:
-        print(
-            "[-] İşlenecek maç bulunamadı."
-        )
+        print("[-] İşlenecek maç bulunamadı.")
         return
 
     print()
     print("[+] Yaklaşan maç:")
-    print(
-        f"    {match['home']} - "
-        f"{match['away']}"
-    )
-    print(
-        f"    Tarih: {match['date']}"
-    )
-    print(
-        f"    Saat: {match['time']}"
-    )
-    print(
-        f"    Organizasyon: "
-        f"{match['competition']}"
-    )
+    print(f"    {match['home']} - {match['away']}")
+    print(f"    Tarih: {match['date']}")
+    print(f"    Saat: {match['time']}")
+    print(f"    Organizasyon: {match['competition']}")
 
     if match["channels"]:
-        channel_log = ", ".join(
-            match["channels"]
-        )
+        channel_log = ", ".join(match["channels"])
     else:
         channel_log = "Belirtilmemiş"
 
-    print(
-        f"    Kanal: {channel_log}"
-    )
-
-    print(
-        f"    URL: {match['url']}"
-    )
+    print(f"    Kanal: {channel_log}")
+    print(f"    URL: {match['url']}")
 
     state = load_state()
+    base_key = create_notification_key(match)
+    notified_matches = state.get("notified_matches", [])
 
-    notification_key = create_notification_key(
-        match
-    )
+    # Bugün maç günü mü kontrolü:
+    is_today = (match["date"] == date.today().isoformat())
+    target_key = f"MATCHDAY|{base_key}" if is_today else base_key
 
-    notified_matches = state.get(
-        "notified_matches",
-        []
-    )
-
-    if notification_key in notified_matches:
-
+    if target_key in notified_matches:
         print()
-        print(
-            "[*] Bu maç + kanal bilgisi "
-            "daha önce bildirildi."
-        )
-
-        print(
-            "[*] Yeni Telegram bildirimi "
-            "gönderilmeyecek."
-        )
-
+        print("[*] Bu bildirim daha önce gönderilmiş.")
+        print("[*] Yeni Telegram bildirimi gönderilmeyecek.")
         return
 
     print()
-    print(
-        "[*] Yeni maç/kanal bilgisi bulundu."
-    )
+    print("[*] Yeni maç/kanal bildirimi hazırlanıyor...")
+    print("[*] Telegram bildirimi gönderiliyor...")
 
-    print(
-        "[*] Telegram bildirimi gönderiliyor..."
-    )
-
-    message = create_message(
-        match
-    )
-
-    success = send_telegram_message(
-        message
-    )
+    message = create_message(match)
+    success = send_telegram_message(message)
 
     if not success:
-
-        print(
-            "[-] Telegram gönderimi başarısız."
-        )
-
+        print("[-] Telegram gönderimi başarısız.")
         return
 
-    notified_matches.append(
-        notification_key
-    )
+    notified_matches.append(target_key)
+    state["notified_matches"] = notified_matches[-100:]
+    save_state(state)
 
-    state["notified_matches"] = (
-        notified_matches[-100:]
-    )
-
-    save_state(
-        state
-    )
-
-    print(
-        "[+] Bildirim state'e kaydedildi."
-    )
-
+    print("[+] Bildirim state'e kaydedildi.")
     print("=" * 60)
-
-
-if __name__ == "__main__":
-    check_and_notify()
