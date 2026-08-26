@@ -434,9 +434,7 @@ def get_next_fenerbahce_match():
 
 def get_live_match_data(match):
     """
-    Canlı maç merkezinden hem resmi kadroyu (mevkileriyle)
-    hem de maçın canlı durumunu ve nihai skorunu dinamik olarak çeker.
-    UTC -> Türkiye saati dönüşümü uygulanmıştır.
+    Canlı maç merkezinden resmi kadroyu ve maç durumunu çeker.
     """
     try:
         team_url = "https://www.fotmob.com/api/teams?id=8695"
@@ -516,7 +514,6 @@ def get_live_match_data(match):
 
 
 def get_highlights_url(match):
-    """Arama sorgusuna maçın oynandığı yıl eklenerek en güncel özet hedeflenir."""
     competition = match.get("competition", "")
     home = match.get("home", "")
     away = match.get("away", "")
@@ -546,29 +543,25 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
     match_date = date.fromisoformat(match["date"])
     channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
 
-    # 1. Kadro Açıklandığında
-    if notification_type == "LINEUPS" and lineup:
-        gk_text = ", ".join(lineup.get("GK", [])) if lineup.get("GK") else "Açıklanıyor..."
-        df_text = ", ".join(lineup.get("DF", [])) if lineup.get("DF") else "Açıklanıyor..."
-        mf_text = ", ".join(lineup.get("MF", [])) if lineup.get("MF") else "Açıklanıyor..."
-        fw_text = ", ".join(lineup.get("FW", [])) if lineup.get("FW") else "Açıklanıyor..."
-
-        return (
-            f"📋 💛 <b>İLK 11'İMİZ BELLİ OLDU!</b> 💙\n"
-            f"🧤 <b>Kaleci:</b> {gk_text}\n"
-            f"🛡 <b>Defans:</b> {df_text}\n"
-            f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
-            f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
-            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
-            f"🏆 <i>{match['competition']}</i>\n"
-            f"⏰ <b>Saat:</b> {match['time']}\n"
-            f"📺 <b>Kanal:</b> {channel_text}"
-        )
-
-    # 2. Maça Başlamak Üzere
+    # 1. Maça Başlamak Üzere & İlk 11 (Birleşik Mesaj)
     if notification_type == "STARTING_SOON":
+        lineup_block = ""
+        if lineup:
+            gk_text = ", ".join(lineup.get("GK", []))
+            df_text = ", ".join(lineup.get("DF", []))
+            mf_text = ", ".join(lineup.get("MF", []))
+            fw_text = ", ".join(lineup.get("FW", []))
+            lineup_block = (
+                f"📋 <b>İLK 11'İMİZ:</b>\n"
+                f"🧤 <b>Kaleci:</b> {gk_text}\n"
+                f"🛡 <b>Defans:</b> {df_text}\n"
+                f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
+                f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
+            )
+
         return (
             f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
+            f"{lineup_block}"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
             f"⏰ <b>Saat:</b> {match['time']}\n"
@@ -576,7 +569,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"💛💙 <i>Haydi Fenerbahçeli! Ekran başına geçme zamanı.</i>"
         )
 
-    # 3. Maç Sona Erdiğinde (Nihai Skorlu)
+    # 2. Maç Sona Erdiğinde (Nihai Skorlu)
     if notification_type == "MATCH_ENDED":
         match_title = score if score else f"{match['home']} - {match['away']}"
         return (
@@ -586,7 +579,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"🟡🔵 Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız."
         )
 
-    # 4. Sabah / Günlük Bildirim (MATCHDAY)
+    # 3. Sabah / Günlük Bildirim (MATCHDAY)
     if notification_type == "MATCHDAY":
         return (
             f"📣 🟡 <b>BUGÜN FENERBAHÇEMİZİN MAÇI VAR!</b> 🔵\n\n"
@@ -597,7 +590,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"📺 <b>Kanal:</b> {channel_text}"
         )
 
-    # 5. Gelecek Maç Bilgisi
+    # 4. Gelecek Maç Bilgisi
     return (
         f"📅 🟡 <b>FENERBAHÇEMİZİN YAKLAŞAN MAÇI</b> 🔵\n\n"
         f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
@@ -617,7 +610,6 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
-    # Gün içi tasarruf kontrolü (Sabah 09:30 harici):
     next_match_date = state.get("next_match_date")
     if now_tr.hour >= 11 and next_match_date and next_match_date != today_str:
         print(f"[*] Bugün ({today_str}) maç günü değil. Sıradaki maç tarihi: {next_match_date}", flush=True)
@@ -665,43 +657,31 @@ def check_and_notify():
     lineup = None
     final_score = None
 
-    # Canlı Maç Verilerini Al (Maça 80 dk kala başlar)
+    # Canlı Maç Verilerini Al
     lineup_data, is_match_finished, score_data = (None, False, None)
-    if is_today and time_diff_minutes <= 80:
+    if is_today and time_diff_minutes <= 45:
         lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
-    # 1.3 Güvenlik Ağı (Fallback)
     is_fallback_ended = (time_diff_minutes <= -170)
 
-    # BİLDİRİM KURALLARI
     # 1. Maç Sonu
     if is_today and ((time_diff_minutes <= -85 and is_match_finished) or is_fallback_ended):
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         final_score = score_data
 
-    # 2. İlk 11 Kadrosu (Maça 75 ile 35 dk kala dinamik kontrol)
-    elif is_today and 35 <= time_diff_minutes <= 75:
-        if lineup_data:
-            target_key = f"LINEUPS|{base_key}"
-            notification_type = "LINEUPS"
-            lineup = lineup_data
-        else:
-            print("[*] Kadrolar henüz açıklanmamış. Bir sonraki kontrolde tekrar denenecek.", flush=True)
-            save_state(state)
-            return
-
-    # 3. Maça Başlamak Üzere (Maça 35 dk ile 0 dk kala)
-    elif is_today and 0 <= time_diff_minutes < 35:
+    # 2. Maça Başlamak Üzere & İlk 11 (Maça 0 - 20 dk kala tek birleşik mesaj)
+    elif is_today and 0 <= time_diff_minutes <= 20:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
+        lineup = lineup_data
 
-    # 4. Maç Günü Sabahı
+    # 3. Maç Günü Sabahı
     elif is_today:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
 
-    # 5. Gelecek Yaklaşan Maç
+    # 4. Gelecek Yaklaşan Maç
     else:
         target_key = base_key
         notification_type = "UPCOMING"
@@ -718,7 +698,7 @@ def check_and_notify():
     if notification_type == "MATCH_ENDED":
         highlights_url = get_highlights_url(match)
         keyboard_buttons.append([{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}])
-    elif notification_type in ("LINEUPS", "STARTING_SOON", "UPCOMING"):
+    elif notification_type in ("STARTING_SOON", "UPCOMING"):
         keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
