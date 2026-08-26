@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -344,49 +345,66 @@ def get_upcoming_matches_from_web():
 
 
 def get_recent_completed_match_from_espn():
-    """ESPN Fikstüründen en son tamamlanmış maçı çeker."""
-    url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/436/schedule"
-    print(f"[*] ESPN API'ye bağlanılıyor: {url}", flush=True)
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        print(f"[*] ESPN API Yanıt Kodu: {resp.status_code}", flush=True)
-        if resp.status_code == 200:
-            data = resp.json()
-            events = data.get("events", [])
-            print(f"[*] ESPN API'den {len(events)} adet maç verisi çekildi. Taranıyor...", flush=True)
+    """ESPN API 403 hatası verdiği için proxy üzerinden istek atar."""
+    base_url = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/436/schedule"
+    encoded_url = urllib.parse.quote(base_url, safe='')
+    
+    # 403 engelini aşmak için proxy listesi
+    proxy_urls = [
+        f"https://api.allorigins.win/raw?url={encoded_url}",
+        f"https://api.codetabs.com/v1/proxy?quest={encoded_url}",
+        base_url  # Son çare orijinal URL
+    ]
+
+    for url in proxy_urls:
+        print(f"[*] ESPN verisi taranıyor: {url[:50]}...", flush=True)
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=15)
+            print(f"[*] HTTP Yanıt Kodu: {resp.status_code}", flush=True)
             
-            for ev in reversed(events):
-                status = ev.get("status", {}).get("type", {})
-                if status.get("completed", False):
-                    ev_date_str = ev.get("date", "")
-                    ev_dt = datetime.fromisoformat(ev_date_str.replace("Z", "+00:00")).astimezone(TURKEY_TZ)
-                    
-                    comp = ev.get("competitions", [{}])[0]
-                    competitors = comp.get("competitors", [])
-                    
-                    if len(competitors) == 2:
-                        home_c = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
-                        away_c = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    print("[-] JSON dönüştürme hatası. Proxy sayfa dönmüş olabilir.", flush=True)
+                    continue
+
+                events = data.get("events", [])
+                print(f"[*] Başarılı! {len(events)} maç çekildi.", flush=True)
+                
+                # Fikstürü sondan başa doğru tara
+                for ev in reversed(events):
+                    status = ev.get("status", {}).get("type", {})
+                    if status.get("completed", False):
+                        ev_date_str = ev.get("date", "")
+                        ev_dt = datetime.fromisoformat(ev_date_str.replace("Z", "+00:00")).astimezone(TURKEY_TZ)
                         
-                        h_name = home_c.get("team", {}).get("displayName", "")
-                        h_score = home_c.get("score", {}).get("displayValue", "")
-                        a_name = away_c.get("team", {}).get("displayName", "")
-                        a_score = away_c.get("score", {}).get("displayValue", "")
+                        comp = ev.get("competitions", [{}])[0]
+                        competitors = comp.get("competitors", [])
                         
-                        league_name = ev.get("league", {}).get("name", "Futbol Müsabakası")
-                        
-                        return {
-                            "home": h_name,
-                            "away": a_name,
-                            "home_score": h_score,
-                            "away_score": a_score,
-                            "date": ev_dt.date().isoformat(),
-                            "time": ev_dt.strftime("%H:%M"),
-                            "competition": league_name,
-                            "dt": ev_dt
-                        }
-    except Exception as e:
-        print(f"[-] ESPN geçmiş maç tarama hatası: {e}", flush=True)
+                        if len(competitors) == 2:
+                            home_c = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
+                            away_c = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+                            
+                            h_name = home_c.get("team", {}).get("displayName", "")
+                            h_score = home_c.get("score", {}).get("displayValue", "")
+                            a_name = away_c.get("team", {}).get("displayName", "")
+                            a_score = away_c.get("score", {}).get("displayValue", "")
+                            
+                            league_name = ev.get("league", {}).get("name", "Futbol Müsabakası")
+                            
+                            return {
+                                "home": h_name,
+                                "away": a_name,
+                                "home_score": h_score,
+                                "away_score": a_score,
+                                "date": ev_dt.date().isoformat(),
+                                "time": ev_dt.strftime("%H:%M"),
+                                "competition": league_name,
+                                "dt": ev_dt
+                            }
+        except Exception as e:
+            print(f"[-] Ağ Hatası: {e}", flush=True)
     return None
 
 
@@ -471,6 +489,7 @@ def check_and_notify():
 
     print("[*] ADIM 1: Geriye Dönük Biten Maç Avcısı Çalışıyor...", flush=True)
     recent_match = get_recent_completed_match_from_espn()
+    
     if recent_match:
         hours_diff = (now_tr - recent_match["dt"]).total_seconds() / 3600
         if 0 <= hours_diff <= 48:
