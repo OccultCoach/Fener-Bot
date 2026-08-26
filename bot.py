@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
 
-# Çıktıların loglarda anında görünmesi için
+# Logların anında GitHub Actions ekranına dökülmesi için
 sys.stdout.reconfigure(line_buffering=True)
 
 # Türkiye Saati (UTC+3)
@@ -94,7 +94,7 @@ def get_page(url):
         return None
 
 
-def send_telegram_message(message):
+def send_telegram_message(message, reply_markup=None):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("[-] TELEGRAM_TOKEN veya CHAT_ID eksik.", flush=True)
         return False
@@ -112,6 +112,8 @@ def send_telegram_message(message):
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
 
         try:
             response = requests.post(url, json=payload, timeout=10)
@@ -250,12 +252,22 @@ def detect_competition(text):
         "Süper Lig",
         "Ziraat Türkiye Kupası",
         "Türkiye Kupası",
+        "Süper Kupa",
     ]
     lower_text = text.lower()
     for competition in competitions:
         if competition.lower() in lower_text:
             return competition
-    return "Futbol"
+    return "Futbol Müsabakası"
+
+
+def is_football_match(full_text):
+    """Basketbol, voleybol gibi diğer branşları filtreler."""
+    lower_text = full_text.lower()
+    other_sports = ["basketbol", "euroleague", "voleybol", "sultanlar", "efeler", "tarfin"]
+    if any(sport in lower_text for sport in other_sports):
+        return False
+    return True
 
 
 def parse_teams_from_match_page(soup):
@@ -299,6 +311,11 @@ def parse_match_detail(url):
 
     soup = BeautifulSoup(html, "html.parser")
     full_text = normalize_text(soup.get_text(" ", strip=True))
+
+    # Sadece Erkek Futbol maçlarını işle
+    if not is_football_match(full_text):
+        print(f"[-] Futbol dışı branş veya alt takım atlandı: {url}", flush=True)
+        return None
 
     home_team, away_team = parse_teams_from_match_page(soup)
     if not home_team or not away_team:
@@ -373,7 +390,7 @@ def get_next_fenerbahce_match():
             matches.append(match)
 
     if not matches:
-        print("[-] Fenerbahçe maçı bulunamadı.", flush=True)
+        print("[-] Yaklaşan Fenerbahçe futbol maçı bulunamadı.", flush=True)
         return None
 
     today = datetime.now(TURKEY_TZ).date()
@@ -388,7 +405,7 @@ def get_next_fenerbahce_match():
             upcoming.append(match)
 
     if not upcoming:
-        print("[-] Yaklaşan Fenerbahçe maçı bulunamadı.", flush=True)
+        print("[-] Gelecek maç bulunamadı.", flush=True)
         return None
 
     upcoming.sort(key=lambda m: (m["date"], m["time"]))
@@ -409,8 +426,12 @@ def create_notification_key(match):
 def create_message(match, notification_type="UPCOMING"):
     match_date = date.fromisoformat(match["date"])
 
-    if notification_type == "STARTING_SOON":
+    if notification_type == "LINEUPS":
+        title = "📋 İLK 11'LER AÇIKLANMAK ÜZERE!"
+    elif notification_type == "STARTING_SOON":
         title = "⏳ FENERBAHÇEMİZİN MAÇI BAŞLAMAK ÜZERE!"
+    elif notification_type == "MATCH_ENDED":
+        title = "🏁 MAÇ SONA ERDİ!"
     elif notification_type == "MATCHDAY":
         title = "BUGÜN FENERBAHÇEMİZİN MAÇI VAR!"
     else:
@@ -420,6 +441,14 @@ def create_message(match, notification_type="UPCOMING"):
         channel_text = " / ".join(match["channels"])
     else:
         channel_text = "Henüz belirtilmemiş"
+
+    if notification_type == "MATCH_ENDED":
+        return (
+            f"📅 <b>{title}</b>\n\n"
+            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"🏆 <i>{match['competition']}</i>\n\n"
+            f"🟡🔵 Maç tamamlandı! Skor ve maç sonu detaylarını aşağıdaki linkten kontrol edebilirsiniz."
+        )
 
     return (
         f"📅 <b>{title}</b>\n\n"
@@ -440,8 +469,7 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
-    # Akşam kontrollerinde gereksiz sorgu engeli:
-    # Eğer sabahki kontrolde sıradaki maçın bugün olmadığı kesinleştiyse, web sitesine istek atmadan çık.
+    # Akşam kontrollerinde gereksiz sorgu tasarrufu:
     next_match_date = state.get("next_match_date")
     if now_tr.hour >= 12 and next_match_date and next_match_date != today_str:
         print(f"[*] Bugün ({today_str}) maç günü değil. Sıradaki maç tarihi: {next_match_date}", flush=True)
@@ -451,7 +479,12 @@ def check_and_notify():
 
     match = get_next_fenerbahce_match()
     if not match:
-        print("[-] İşlenecek maç bulunamadı.", flush=True)
+        print("[-] İşlenecek maç bulunamadı veya ayrıştırma hatası.", flush=True)
+        # Eğer sabah kontrolüyse ve maç bulunamadıysa yöneticiye bildirim at
+        if now_tr.hour < 12 and "PARSING_ERROR" not in state.get("notified_matches", []):
+            send_telegram_message("⚠️ <b>Bot Uyarısı:</b> Fikstürdeki maç ayrıştırılamadı. Sayfa yapısı değişmiş olabilir.")
+            state.setdefault("notified_matches", []).append("PARSING_ERROR")
+            save_state(state)
         return
 
     print(
@@ -466,7 +499,7 @@ def check_and_notify():
     channel_log = ", ".join(match["channels"]) if match["channels"] else "Belirtilmemiş"
     print(f"    Kanal: {channel_log}\n    URL: {match['url']}", flush=True)
 
-    # Sıradaki maçın tarihini state'e kaydet
+    # Sıradaki maçın tarihini güncelle
     state["next_match_date"] = match["date"]
 
     base_key = create_notification_key(match)
@@ -481,15 +514,27 @@ def check_and_notify():
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
 
-    # 1. Kontrol: Maça 0 ile 20 dakika arası mı kaldı? (15 dk kala uyarısı)
-    if is_today and 0 <= time_diff_minutes <= 20:
+    notification_type = None
+    target_key = None
+
+    # Bildirim Tetikleme Kuralları:
+    # 1. Maç Sonu (Maç başladıktan 115 - 160 dk sonrası)
+    if is_today and -160 <= time_diff_minutes <= -115:
+        target_key = f"ENDED|{base_key}"
+        notification_type = "MATCH_ENDED"
+    # 2. Maça 15 dk kala (0 ile 20 dk arası)
+    elif is_today and 0 <= time_diff_minutes <= 20:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
-    # 2. Kontrol: Maç günü sabahı mı?
+    # 3. İlk 11'ler / 1 saat kala (45 ile 65 dk arası)
+    elif is_today and 45 <= time_diff_minutes <= 65:
+        target_key = f"LINEUPS|{base_key}"
+        notification_type = "LINEUPS"
+    # 4. Maç Günü Sabahı
     elif is_today:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
-    # 3. Kontrol: Fikstüre yeni giren maç bildirimi
+    # 5. Gelecek Maç Bilgisi
     else:
         target_key = base_key
         notification_type = "UPCOMING"
@@ -502,8 +547,17 @@ def check_and_notify():
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
+    # Buton Hazırlığı
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}
+            ]
+        ]
+    }
+
     message = create_message(match, notification_type=notification_type)
-    success = send_telegram_message(message)
+    success = send_telegram_message(message, reply_markup=reply_markup)
 
     if not success:
         print("[-] Telegram gönderimi başarısız.", flush=True)
