@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
 
-# Logların anında görünmesi için
+# Logların anında GitHub Actions konsoluna dökülmesi için
 sys.stdout.reconfigure(line_buffering=True)
 
 # Türkiye Saati (UTC+3)
@@ -435,13 +435,13 @@ def get_next_fenerbahce_match():
 def get_live_match_data(match):
     """
     Canlı maç merkezinden hem resmi kadroyu (mevkileriyle)
-    hem de maçın canlı durumunu (Başladı mı / Bitti mi) dinamik olarak çeker.
+    hem de maçın canlı durumunu ve nihai skorunu dinamik olarak çeker.
     """
     try:
         team_url = "https://www.fotmob.com/api/teams?id=8695"
         resp = requests.get(team_url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
-            return None, False
+            return None, False, None
 
         fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
         match_id = None
@@ -452,18 +452,30 @@ def get_live_match_data(match):
                 break
 
         if not match_id:
-            return None, False
+            return None, False, None
 
         detail_url = f"https://www.fotmob.com/api/matchDetails?matchId={match_id}"
         m_resp = requests.get(detail_url, headers=HEADERS, timeout=10)
         if m_resp.status_code != 200:
-            return None, False
+            return None, False, None
 
         m_data = m_resp.json()
         
-        # 1. Maç Durumu Kontrolü (Hakem bitiş düdüğünü çaldı mı?)
-        status_info = m_data.get("header", {}).get("status", {})
+        # 1. Maç Durumu ve Skor Kontrolü
+        header = m_data.get("header", {})
+        status_info = header.get("status", {})
         is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
+        
+        score_text = None
+        if is_finished:
+            teams = header.get("teams", [])
+            if len(teams) >= 2:
+                home_team = teams[0].get("name", match["home"])
+                home_score = teams[0].get("score", "")
+                away_team = teams[1].get("name", match["away"])
+                away_score = teams[1].get("score", "")
+                if home_score != "" and away_score != "":
+                    score_text = f"{home_team} {home_score} - {away_score} {away_team}"
 
         # 2. Dinamik Kadro ve Mevki Çekimi
         content = m_data.get("content", {})
@@ -487,10 +499,10 @@ def get_live_match_data(match):
             if total_players == 11 and len(roles["GK"]) >= 1:
                 lineup_roles = roles
 
-        return lineup_roles, is_finished
+        return lineup_roles, is_finished, score_text
     except Exception as e:
         print(f"[-] Canlı maç verisi çekilirken hata: {e}", flush=True)
-        return None, False
+        return None, False, None
 
 
 def get_highlights_url(match):
@@ -518,7 +530,7 @@ def create_notification_key(match):
     )
 
 
-def create_message(match, notification_type="UPCOMING", lineup=None):
+def create_message(match, notification_type="UPCOMING", lineup=None, score=None):
     match_date = date.fromisoformat(match["date"])
     channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
 
@@ -552,11 +564,12 @@ def create_message(match, notification_type="UPCOMING", lineup=None):
             f"💛💙 <i>Haydi Fenerbahçe! Ekran başına geçme zamanı.</i>"
         )
 
-    # 3. Maç Sona Erdiğinde
+    # 3. Maç Sona Erdiğinde (Nihai Skorlu)
     if notification_type == "MATCH_ENDED":
+        match_title = score if score else f"{match['home']} - {match['away']}"
         return (
             f"🏁 💛 <b>MAÇ SONA ERDİ!</b> 💙 🎉\n\n"
-            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"⚽️ <b>{match_title}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n\n"
             f"🟡🔵 Karşılaşma tamamlandı! Maçın geniş özeti ve gollerini aşağıdaki butondan izleyebilirsiniz."
         )
@@ -638,22 +651,24 @@ def check_and_notify():
     notification_type = None
     target_key = None
     lineup = None
+    final_score = None
 
-    # Canlı Maç Verilerini (Dinamik Kadro ve Maç Bitti Bilgisi) Al
-    lineup_data, is_match_finished = (None, False)
+    # Canlı Maç Verilerini (Dinamik Kadro, Bitiş Durumu ve Skor) Al
+    lineup_data, is_match_finished, score_data = (None, False, None)
     if is_today and time_diff_minutes <= 75:
-        lineup_data, is_match_finished = get_live_match_data(match)
+        lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
     # Bildirim Tetikleme Kuralları:
-    # 1. Maç Sonu (Hakem maçı bitirdiğinde - süreden bağımsız)
+    # 1. Maç Sonu (Hakem maçı bitirdiğinde ve skor kesinleştiğinde)
     if is_today and time_diff_minutes <= -85 and is_match_finished:
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
+        final_score = score_data
     # 2. Maça 15 dk kala (0 ile 25 dk arası)
     elif is_today and 0 <= time_diff_minutes <= 25:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
-    # 3. İlk 11 Kadrosu (Dinamik olarak açıklandığı an, 45-75 dk arası)
+    # 3. İlk 11 Kadrosu (45-75 dk arası dinamik tespit)
     elif is_today and 45 <= time_diff_minutes <= 75:
         if lineup_data:
             target_key = f"LINEUPS|{base_key}"
@@ -691,7 +706,7 @@ def check_and_notify():
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
 
-    message = create_message(match, notification_type=notification_type, lineup=lineup)
+    message = create_message(match, notification_type=notification_type, lineup=lineup, score=final_score)
     success = send_telegram_message(message, reply_markup=reply_markup)
 
     if not success:
