@@ -213,9 +213,6 @@ def parse_time_from_text(text):
 
 
 def detect_competition(target_text):
-    """
-    Sadece URL ve ilgili maç başlığından/açıklamasından lig tespit eder.
-    """
     competitions = [
         "UEFA Şampiyonlar Ligi Play-Off",
         "UEFA Şampiyonlar Ligi Ön Eleme",
@@ -356,42 +353,39 @@ def get_upcoming_matches_from_web():
     return matches
 
 
+def collect_fotmob_fixtures(obj, found_matches=None):
+    """JSON içindeki tüm fikstür ve maç objelerini özyinelemeli toplar."""
+    if found_matches is None:
+        found_matches = []
+    if isinstance(obj, dict):
+        if "id" in obj and ("utcTime" in obj.get("status", {}) or "home" in obj):
+            found_matches.append(obj)
+        for v in obj.values():
+            collect_fotmob_fixtures(v, found_matches)
+    elif isinstance(obj, list):
+        for item in obj:
+            collect_fotmob_fixtures(item, found_matches)
+    return found_matches
+
+
 def get_fotmob_all_matches():
-    """
-    FotMob'dan hem tamamlanan (previous/overview) hem de gelecek maçları toplar.
-    """
     try:
         team_url = "https://www.fotmob.com/api/teams?id=8695"
         resp = requests.get(team_url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
+            print(f"[-] FotMob API yanıt vermedi: HTTP {resp.status_code}", flush=True)
             return []
 
         data = resp.json()
-        all_matches = []
-
-        # 1. Overview sekmesindeki fikstürler
-        overview_fixes = data.get("overview", {}).get("overviewFixtures", [])
-        if isinstance(overview_fixes, list):
-            all_matches.extend(overview_fixes)
-
-        # 2. Fixtures -> previousFixtures (Biten maçlar)
-        prev_fixes = data.get("fixtures", {}).get("previousFixtures", [])
-        if isinstance(prev_fixes, list):
-            all_matches.extend(prev_fixes)
-
-        # 3. Fixtures -> allFixtures -> fixtures (Gelecek maçlar)
-        upcoming_fixes = data.get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
-        if isinstance(upcoming_fixes, list):
-            all_matches.extend(upcoming_fixes)
-
-        # Tekil match ID'lere göre filtrele
-        unique_matches = {}
-        for m in all_matches:
+        raw_matches = collect_fotmob_fixtures(data)
+        
+        unique = {}
+        for m in raw_matches:
             m_id = m.get("id")
-            if m_id and m_id not in unique_matches:
-                unique_matches[m_id] = m
-
-        return list(unique_matches.values())
+            if m_id and m_id not in unique:
+                unique[m_id] = m
+        print(f"[+] FotMob'dan toplam {len(unique)} adet maç verisi tarandı.", flush=True)
+        return list(unique.values())
     except Exception as e:
         print(f"[-] FotMob maç listesi alınamadı: {e}", flush=True)
         return []
@@ -550,7 +544,8 @@ def check_and_notify():
     # ADIM 1: FotMob üzerinden son biten maç kontrolü
     fotmob_matches = get_fotmob_all_matches()
     for fix in fotmob_matches:
-        fix_utc_str = fix.get("status", {}).get("utcTime", "")
+        status_info = fix.get("status", {})
+        fix_utc_str = status_info.get("utcTime", "")
         if not fix_utc_str:
             continue
         try:
