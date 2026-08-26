@@ -565,7 +565,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"📺 <b>Kanal:</b> {channel_text}"
         )
 
-    # 2. Maça 15 Dk Kala
+    # 2. Maça Başlamak Üzere (0-30 dk kala)
     if notification_type == "STARTING_SOON":
         return (
             f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
@@ -665,32 +665,32 @@ def check_and_notify():
     lineup = None
     final_score = None
 
-    # Canlı Maç Verilerini (Dinamik Kadro, Bitiş Durumu ve Skor) Al
+    # Canlı Maç Verilerini Al
     lineup_data, is_match_finished, score_data = (None, False, None)
     if is_today and time_diff_minutes <= 75:
         lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
-    # 1.3 Güvenlik Ağı (Fallback): API yanıt vermese bile 170 dk sonra maç bitti sayılır
+    # 1.3 Güvenlik Ağı (Fallback)
     is_fallback_ended = (time_diff_minutes <= -170)
 
     # Bildirim Tetikleme Kuralları:
-    # 1. Maç Sonu (Hakem maçı bitirdiğinde VEYA fallback süresi dolduğunda)
+    # 1. Maç Sonu
     if is_today and ((time_diff_minutes <= -85 and is_match_finished) or is_fallback_ended):
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         final_score = score_data
-    # 2. Maça 15 dk kala (0 ile 25 dk arası)
-    elif is_today and 0 <= time_diff_minutes <= 25:
+    # 2. Maça Başlamak Üzere (0 ile 30 dk arası)
+    elif is_today and 0 <= time_diff_minutes <= 30:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
-    # 3. İlk 11 Kadrosu (45-75 dk arası dinamik tespit)
-    elif is_today and 45 <= time_diff_minutes <= 75:
+    # 3. İlk 11 Kadrosu (30 ile 75 dk arası dinamik tespit)
+    elif is_today and 30 <= time_diff_minutes <= 75:
         if lineup_data:
             target_key = f"LINEUPS|{base_key}"
             notification_type = "LINEUPS"
             lineup = lineup_data
         else:
-            print("[*] Kadrolar henüz açıklanmamış. Bir sonraki 15 dakikalık kontrolde tekrar denenecek.", flush=True)
+            print("[*] Kadrolar henüz açıklanmamış. Bir sonraki kontrolde tekrar denenecek.", flush=True)
             save_state(state)
             return
     # 4. Maç Günü Sabahı
@@ -711,11 +711,9 @@ def check_and_notify():
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
     keyboard_buttons = []
-    # 4. Bildirim (Maç Sonu): Sadece özet butonu ekle
     if notification_type == "MATCH_ENDED":
         highlights_url = get_highlights_url(match)
         keyboard_buttons.append([{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}])
-    # 2. Bildirim (Kadro), 3. Bildirim (15 Dk Kala) ve 5. Bildirim (Gelecek Maç): Maç Detayı Butonu ekle
     elif notification_type in ("LINEUPS", "STARTING_SOON", "UPCOMING"):
         keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
 
