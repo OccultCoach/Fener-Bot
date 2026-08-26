@@ -436,6 +436,7 @@ def get_live_match_data(match):
     """
     Canlı maç merkezinden hem resmi kadroyu (mevkileriyle)
     hem de maçın canlı durumunu ve nihai skorunu dinamik olarak çeker.
+    UTC -> Türkiye saati dönüşümü uygulanmıştır.
     """
     try:
         team_url = "https://www.fotmob.com/api/teams?id=8695"
@@ -445,11 +446,21 @@ def get_live_match_data(match):
 
         fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
         match_id = None
+        
+        # 1.1 UTC Saatini Türkiye Saatine çevirerek güvenli tarih eşleştirme
         for fix in fixtures:
-            fix_time = fix.get("status", {}).get("utcTime", "")
-            if fix_time.startswith(match["date"]):
-                match_id = fix.get("id")
-                break
+            fix_utc_str = fix.get("status", {}).get("utcTime", "")
+            if fix_utc_str:
+                try:
+                    utc_dt = datetime.fromisoformat(fix_utc_str.replace("Z", "+00:00"))
+                    tr_dt = utc_dt.astimezone(TURKEY_TZ)
+                    if tr_dt.date().isoformat() == match["date"]:
+                        match_id = fix.get("id")
+                        break
+                except Exception:
+                    if fix_utc_str.startswith(match["date"]):
+                        match_id = fix.get("id")
+                        break
 
         if not match_id:
             return None, False, None
@@ -506,14 +517,16 @@ def get_live_match_data(match):
 
 
 def get_highlights_url(match):
+    """2. Geliştirme: Arama sorgusuna maçın oynandığı yıl eklenerek en güncel özet hedeflenir."""
     competition = match.get("competition", "")
     home = match.get("home", "")
     away = match.get("away", "")
+    match_year = match.get("date", "").split("-")[0]
     
     if "Süper Lig" in competition or "Türkiye Kupası" in competition:
-        search_query = f"{home} {away} maç özeti beIN SPORTS Türkiye"
+        search_query = f"{home} {away} {match_year} maç özeti beIN SPORTS Türkiye"
     else:
-        search_query = f"{home} {away} maç özeti TRT Spor Tabii Spor"
+        search_query = f"{home} {away} {match_year} maç özeti TRT Spor Tabii Spor"
         
     encoded_query = requests.utils.quote(search_query)
     return f"https://www.youtube.com/results?search_query={encoded_query}"
@@ -534,7 +547,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
     match_date = date.fromisoformat(match["date"])
     channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
 
-    # 1. Kadro Açıklandığında
+    # 1. Kadro Açıklandığında (Kadro üstte bitişik, maç detayları altta 1 satır boşlukla)
     if notification_type == "LINEUPS" and lineup:
         gk_text = ", ".join(lineup.get("GK", [])) if lineup.get("GK") else "Açıklanıyor..."
         df_text = ", ".join(lineup.get("DF", [])) if lineup.get("DF") else "Açıklanıyor..."
@@ -542,15 +555,15 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
         fw_text = ", ".join(lineup.get("FW", [])) if lineup.get("FW") else "Açıklanıyor..."
 
         return (
-            f"📋 💛 <b>İLK 11'İMİZ BELLİ OLDU!</b> 💙\n\n"
-            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
-            f"🏆 <i>{match['competition']}</i>\n"
-            f"⏰ <b>Saat:</b> {match['time']}\n"
-            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"📋 💛 <b>İLK 11'İMİZ BELLİ OLDU!</b> 💙\n"
             f"🧤 <b>Kaleci:</b> {gk_text}\n"
             f"🛡 <b>Defans:</b> {df_text}\n"
             f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
-            f"⚡️ <b>Hücum:</b> {fw_text}"
+            f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
+            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"🏆 <i>{match['competition']}</i>\n"
+            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"📺 <b>Kanal:</b> {channel_text}"
         )
 
     # 2. Maça 15 Dk Kala
@@ -658,9 +671,12 @@ def check_and_notify():
     if is_today and time_diff_minutes <= 75:
         lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
+    # 1.3 Güvenlik Ağı (Fallback): API yanıt vermese bile 170 dk sonra maç bitti sayılır
+    is_fallback_ended = (time_diff_minutes <= -170)
+
     # Bildirim Tetikleme Kuralları:
-    # 1. Maç Sonu (Hakem maçı bitirdiğinde ve skor kesinleştiğinde)
-    if is_today and time_diff_minutes <= -85 and is_match_finished:
+    # 1. Maç Sonu (Hakem maçı bitirdiğinde VEYA fallback süresi dolduğunda)
+    if is_today and ((time_diff_minutes <= -85 and is_match_finished) or is_fallback_ended):
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         final_score = score_data
