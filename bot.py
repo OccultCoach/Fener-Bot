@@ -2,13 +2,16 @@ import json
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 from bs4 import BeautifulSoup
 
-# Çıktıların loglarda anında görünmesi için unbuffered yapıyoruz
+# Çıktıların GitHub Actions loglarında anında görünmesi için
 sys.stdout.reconfigure(line_buffering=True)
+
+# Türkiye Saati (UTC+3)
+TURKEY_TZ = timezone(timedelta(hours=3))
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -98,7 +101,7 @@ def send_telegram_message(message):
 
     chat_ids = [cid.strip() for cid in CHAT_ID.split(",") if cid.strip()]
     print(f"[*] Toplam {len(chat_ids)} kişiye bildirim gönderilecek...", flush=True)
-    
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     success_count = 0
 
@@ -267,7 +270,12 @@ def parse_teams_from_match_page(soup):
             candidates.append(title_text)
 
     for text in candidates:
-        cleaned_text = re.sub(r"\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4}", "", text, flags=re.IGNORECASE).strip()
+        cleaned_text = re.sub(
+            r"\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4}",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
         match = re.search(
             r"(.+?)\s+(?:-|–|—|vs)\s+(.+?)(?:\s+maçı|\s+h?angi kanalda.*)?$",
             cleaned_text,
@@ -367,7 +375,7 @@ def get_next_fenerbahce_match():
         print("[-] Fenerbahçe maçı bulunamadı.", flush=True)
         return None
 
-    today = date.today()
+    today = datetime.now(TURKEY_TZ).date()
     upcoming = []
 
     for match in matches:
@@ -397,9 +405,12 @@ def create_notification_key(match):
     )
 
 
-def create_message(match):
+def create_message(match, notification_type="UPCOMING"):
     match_date = date.fromisoformat(match["date"])
-    if match_date == date.today():
+
+    if notification_type == "STARTING_SOON":
+        title = "⏳ FENERBAHÇEMİZİN MAÇI BAŞLAMAK ÜZERE!"
+    elif notification_type == "MATCHDAY":
         title = "BUGÜN FENERBAHÇEMİZİN MAÇI VAR!"
     else:
         title = "FENERBAHÇEMİZİN YAKLAŞAN MAÇI"
@@ -429,7 +440,14 @@ def check_and_notify():
         print("[-] İşlenecek maç bulunamadı.", flush=True)
         return
 
-    print(f"\n[+] Yaklaşan maç:\n    {match['home']} - {match['away']}\n    Tarih: {match['date']}\n    Saat: {match['time']}\n    Organizasyon: {match['competition']}", flush=True)
+    print(
+        f"\n[+] Yaklaşan maç:\n"
+        f"    {match['home']} - {match['away']}\n"
+        f"    Tarih: {match['date']}\n"
+        f"    Saat: {match['time']}\n"
+        f"    Organizasyon: {match['competition']}",
+        flush=True,
+    )
 
     channel_log = ", ".join(match["channels"]) if match["channels"] else "Belirtilmemiş"
     print(f"    Kanal: {channel_log}\n    URL: {match['url']}", flush=True)
@@ -438,16 +456,38 @@ def check_and_notify():
     base_key = create_notification_key(match)
     notified_matches = state.get("notified_matches", [])
 
-    is_today = (match["date"] == date.today().isoformat())
-    target_key = f"MATCHDAY|{base_key}" if is_today else base_key
+    # Şu anki Türkiye saati ve maç saati hesaplaması
+    now_tr = datetime.now(TURKEY_TZ)
+    match_dt_str = f"{match['date']} {match['time']}"
+    match_dt = datetime.strptime(match_dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
+
+    time_diff_minutes = (match_dt - now_tr).total_seconds() / 60
+    is_today = (match["date"] == now_tr.date().isoformat())
+
+    print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
+    print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
+
+    # 1. Kontrol: Maça 0 ile 20 dakika arası mı kaldı? (15 dk kala uyarısı)
+    if is_today and 0 <= time_diff_minutes <= 20:
+        target_key = f"SOON|{base_key}"
+        notification_type = "STARTING_SOON"
+    # 2. Kontrol: Maç günü sabahı mı?
+    elif is_today:
+        target_key = f"MATCHDAY|{base_key}"
+        notification_type = "MATCHDAY"
+    # 3. Kontrol: Gelecek yaklaşan maç bildirimi
+    else:
+        target_key = base_key
+        notification_type = "UPCOMING"
 
     if target_key in notified_matches:
         print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}).\n[*] Yeni Telegram bildirimi gönderilmeyecek.", flush=True)
         return
 
-    print("\n[*] Yeni maç/kanal bildirimi hazırlanıyor...\n[*] Telegram bildirimi gönderiliyor...", flush=True)
+    print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
+    print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
-    message = create_message(match)
+    message = create_message(match, notification_type=notification_type)
     success = send_telegram_message(message)
 
     if not success:
