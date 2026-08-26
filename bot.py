@@ -134,19 +134,25 @@ def send_telegram_message(message, reply_markup=None):
 
 
 def load_state():
+    default_state = {
+        "notified_matches": [],
+        "active_match": None,
+        "last_notified_upcoming": None,
+    }
     if not os.path.exists(STATE_FILE):
-        return {"notified_matches": [], "next_match_date": None}
+        return default_state
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as file:
             state = json.load(file)
         if not isinstance(state, dict):
-            return {"notified_matches": [], "next_match_date": None}
+            return default_state
         state.setdefault("notified_matches", [])
-        state.setdefault("next_match_date", None)
+        state.setdefault("active_match", None)
+        state.setdefault("last_notified_upcoming", None)
         return state
     except Exception as e:
         print(f"[-] State dosyası okunamadı: {e}", flush=True)
-        return {"notified_matches": [], "next_match_date": None}
+        return default_state
 
 
 def save_state(state):
@@ -268,10 +274,12 @@ def detect_competition(text):
         "Türkiye Kupası",
         "Süper Kupa",
     ]
+    # Uzun isimli olanlar önce kontrol edilir
+    competitions_sorted = sorted(competitions, key=len, reverse=True)
     lower_text = text.lower()
-    for competition in competitions:
-        if competition.lower() in lower_text:
-            return competition
+    for comp in competitions_sorted:
+        if comp.lower() in lower_text:
+            return comp
     return "Futbol Müsabakası"
 
 
@@ -397,11 +405,10 @@ def get_match_links():
     return links
 
 
-def get_next_fenerbahce_match():
+def get_upcoming_matches_from_web():
     links = get_match_links()
     if not links:
-        print("[-] Maç linki bulunamadı.", flush=True)
-        return None
+        return []
 
     matches = []
     for link in links:
@@ -409,28 +416,8 @@ def get_next_fenerbahce_match():
         if match:
             matches.append(match)
 
-    if not matches:
-        print("[-] Yaklaşan Fenerbahçe futbol maçı bulunamadı.", flush=True)
-        return None
-
-    now_tr = datetime.now(TURKEY_TZ)
-    upcoming = []
-
-    for match in matches:
-        try:
-            match_dt = datetime.strptime(f"{match['date']} {match['time']}", "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
-        except ValueError:
-            continue
-        # Başlamasının üzerinden en fazla 4 saat geçmiş veya gelecekteki maçları al
-        if match_dt >= now_tr - timedelta(hours=4):
-            upcoming.append(match)
-
-    if not upcoming:
-        print("[-] Gelecek maç bulunamadı.", flush=True)
-        return None
-
-    upcoming.sort(key=lambda m: (m["date"], m["time"]))
-    return upcoming[0]
+    matches.sort(key=lambda m: (m["date"], m["time"]))
+    return matches
 
 
 def get_live_match_data(match):
@@ -607,9 +594,27 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
-    match = get_next_fenerbahce_match()
+    # 1. Hafızada bitmesi beklenen bir aktif maç var mı?
+    active_match = state.get("active_match")
+    match = None
+
+    if active_match:
+        print(f"[*] Hafızada takip edilen aktif maç bulundu: {active_match['home']} - {active_match['away']}", flush=True)
+        match = active_match
+    else:
+        # Hafızada aktif maç yoksa web sitesinden yaklaşan maçları çek
+        web_matches = get_upcoming_matches_from_web()
+        if web_matches:
+            match = web_matches[0]
+            # Eğer maç bugünse veya başladıysa onu aktif maç yap
+            match_dt = datetime.strptime(f"{match['date']} {match['time']}", "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
+            time_diff = (match_dt - now_tr).total_seconds() / 60
+            if match["date"] == today_str or time_diff <= 120:
+                state["active_match"] = match
+                save_state(state)
+
     if not match:
-        print("[-] İşlenecek maç bulunamadı veya ayrıştırma hatası.", flush=True)
+        print("[-] İşlenecek maç bulunamadı.", flush=True)
         return
 
     print(
@@ -629,7 +634,6 @@ def check_and_notify():
 
     match_dt_str = f"{match['date']} {match['time']}"
     match_dt = datetime.strptime(match_dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=TURKEY_TZ)
-
     time_diff_minutes = (match_dt - now_tr).total_seconds() / 60
 
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
@@ -640,29 +644,33 @@ def check_and_notify():
     lineup = None
     final_score = None
 
-    # Maç başladıktan sonra veya maça 45 dk kala canlı veriyi çek
+    # Canlı Maç Verilerini Al
     lineup_data, is_match_finished, score_data = (None, False, None)
     if -300 <= time_diff_minutes <= 45:
         lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
     is_fallback_ended = (time_diff_minutes <= -160)
 
-    # 1. Maç Sonu (Maç bitmişse VEYA süre dolmuşsa - Gece yarısı gün değişiminden bağımsız)
+    # 1. Maç Sonu (Maç bitmişse VEYA süre dolmuşsa)
     if time_diff_minutes <= -85 and (is_match_finished or is_fallback_ended):
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         final_score = score_data
+        # Maç bittiği için aktif maçtan çıkar
+        state["active_match"] = None
 
     # 2. Maça Başlamak Üzere & İlk 11 (0 - 15 dk kala)
     elif 0 <= time_diff_minutes <= 15:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
+        state["active_match"] = match
 
     # 3. Maç Günü Sabahı
     elif match["date"] == today_str:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
+        state["active_match"] = match
 
     # 4. Gelecek Yaklaşan Maç
     else:
