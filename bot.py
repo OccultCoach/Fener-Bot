@@ -31,57 +31,32 @@ HEADERS = {
 
 TIMEOUT = 15
 
-# Fenerbahçe A Takım Resmi Oyuncu ve Mevki Haritası
-FB_SQUAD_POSITIONS = {
-    # Kaleciler
-    "GK": [
-        "Dominik Livakovic", "İrfan Can Eğribayat", "Ertuğrul Çetin", 
-        "Livakovic", "İrfan Can", "Ertuğrul"
-    ],
-    # Defans
-    "DF": [
-        "Bright Osayi-Samuel", "Alexander Djiku", "Rodrigo Becao", "Jayden Oosterwolde",
-        "Mert Müldür", "Çağlar Söyüncü", "Samet Akaydin", "Levent Mercan", "Serdar Aziz",
-        "Osayi-Samuel", "Osayi", "Djiku", "Becao", "Oosterwolde", "Çağlar", "Samet"
-    ],
-    # Orta Saha
-    "MF": [
-        "İsmail Yüksek", "Fred", "Sofyan Amrabat", "Sebastian Szymanski", 
-        "Mert Hakan Yandaş", "Bartuğ Elmaz", "İrfan Can Kahveci",
-        "İsmail", "Amrabat", "Szymanski", "Mert Hakan"
-    ],
-    # Forvet / Kanat
-    "FW": [
-        "Dusan Tadic", "Allan Saint-Maximin", "Edin Dzeko", "Youssef En-Nesyri", 
-        "Cenk Tosun", "Cengiz Ünder", "Oğuz Aydın", "Burak Kapacak",
-        "Tadic", "Saint-Maximin", "Dzeko", "En-Nesyri", "Cenk", "Cengiz", "Oğuz"
-    ]
-}
-
-MAIN_TV_CHANNELS = [
+# Türkiye Resmi / Esas Yayıncı Öncelik Sıralaması (En üstteki en önce yazılır)
+CHANNEL_PRIORITY = [
+    # Türkiye Ulusal & Açık Kanallar
     "TRT 1",
-    "TRT Spor Yıldız",
     "TRT Spor",
+    "TRT Spor Yıldız",
+    "TV8,5",
+    "TV8.5",
+    "TV8",
+    "ATV",
+    "A Spor",
+    # Türkiye Resmi Dijital & Platform Yayıncıları
     "Tabii Spor",
     "Tabii",
-    "beIN Sports Haber",
     "beIN Sports 1",
     "beIN Sports 2",
     "beIN Sports 3",
     "beIN Sports 4",
     "beIN Sports MAX 1",
     "beIN Sports MAX 2",
-    "S Sport Plus",
+    "beIN Sports Haber",
+    "S Sport",
     "S Sport 1",
     "S Sport 2",
-    "S Sport",
-    "CBC Sport",
+    "S Sport Plus",
     "Exxen",
-    "TV8,5",
-    "TV8.5",
-    "TV8",
-    "A Spor",
-    "ATV",
     "Tivibu Spor 1",
     "Tivibu Spor 2",
     "Tivibu Spor",
@@ -90,7 +65,32 @@ MAIN_TV_CHANNELS = [
     "Smart Spor",
     "Spor Smart",
     "FB TV",
+    # Yabancı / Uydu Yayıncılar
+    "CBC Sport",
 ]
+
+# Fenerbahçe A Takım Resmi Oyuncu ve Mevki Haritası
+FB_SQUAD_POSITIONS = {
+    "GK": [
+        "Dominik Livakovic", "İrfan Can Eğribayat", "Ertuğrul Çetin", 
+        "Livakovic", "İrfan Can", "Ertuğrul"
+    ],
+    "DF": [
+        "Bright Osayi-Samuel", "Alexander Djiku", "Rodrigo Becao", "Jayden Oosterwolde",
+        "Mert Müldür", "Çağlar Söyüncü", "Samet Akaydin", "Levent Mercan", "Serdar Aziz",
+        "Osayi-Samuel", "Osayi", "Djiku", "Becao", "Oosterwolde", "Çağlar", "Samet"
+    ],
+    "MF": [
+        "İsmail Yüksek", "Fred", "Sofyan Amrabat", "Sebastian Szymanski", 
+        "Mert Hakan Yandaş", "Bartuğ Elmaz", "İrfan Can Kahveci",
+        "İsmail", "Amrabat", "Szymanski", "Mert Hakan"
+    ],
+    "FW": [
+        "Dusan Tadic", "Allan Saint-Maximin", "Edin Dzeko", "Youssef En-Nesyri", 
+        "Cenk Tosun", "Cengiz Ünder", "Oğuz Aydın", "Burak Kapacak",
+        "Tadic", "Saint-Maximin", "Dzeko", "En-Nesyri", "Cenk", "Cengiz", "Oğuz"
+    ]
+}
 
 
 def normalize_text(text):
@@ -202,10 +202,20 @@ def canonical_channel_name(channel):
     return mapping.get(normalized, channel)
 
 
+def sort_channels_by_priority(channels):
+    """Kanalları Türkiye esas yayıncı önceliğine göre sıralar."""
+    def get_priority(ch):
+        try:
+            return CHANNEL_PRIORITY.index(ch)
+        except ValueError:
+            return 999  # Bilinmeyen kanallar en sona
+    return sorted(channels, key=get_priority)
+
+
 def detect_channels(text):
     text = normalize_text(text)
     detected = []
-    channels_sorted = sorted(MAIN_TV_CHANNELS, key=len, reverse=True)
+    channels_sorted = sorted(CHANNEL_PRIORITY, key=len, reverse=True)
 
     for channel in channels_sorted:
         pattern = r"(?<![A-Za-z0-9])" + re.escape(channel) + r"(?![A-Za-z0-9])"
@@ -213,7 +223,9 @@ def detect_channels(text):
             canonical = canonical_channel_name(channel)
             if canonical not in detected:
                 detected.append(canonical)
-    return detected
+    
+    # Esas kanal en başa gelecek şekilde öncelik sıralaması uygula
+    return sort_channels_by_priority(detected)
 
 
 def extract_broadcast_section(soup):
@@ -447,8 +459,7 @@ def get_next_fenerbahce_match():
 
 def fetch_official_lineup(match):
     """
-    Türk spor kaynaklarından (Mackolik / Sporx / TFF / Fenerbahçe Resmi)
-    resmi maç kadrosunu çeker ve mevkilerine göre gruplar.
+    Türk spor kaynaklarından resmi maç kadrosunu çeker ve mevkilerine göre gruplar.
     """
     print("[*] Resmi kaynaklardan mevki sıralı ilk 11 kontrol ediliyor...", flush=True)
     opponent = match["away"] if "fenerbahçe" in match["home"].lower() else match["home"]
@@ -484,7 +495,7 @@ def fetch_official_lineup(match):
 
 
 def create_notification_key(match):
-    channels = "|".join(sorted(match["channels"]))
+    channels = "|".join(match["channels"])
     return (
         f"{match['date']}|"
         f"{match['time']}|"
@@ -496,24 +507,9 @@ def create_notification_key(match):
 
 def create_message(match, notification_type="UPCOMING", lineup=None):
     match_date = date.fromisoformat(match["date"])
+    channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
 
-    if notification_type == "LINEUPS":
-        title = "📋 FENERBAHÇEMİZİN İLK 11'İ BELLİ OLDU!"
-    elif notification_type == "STARTING_SOON":
-        title = "⏳ FENERBAHÇEMİZİN MAÇI BAŞLAMAK ÜZERE!"
-    elif notification_type == "MATCH_ENDED":
-        title = "🏁 MAÇ SONA ERDİ!"
-    elif notification_type == "MATCHDAY":
-        title = "BUGÜN FENERBAHÇEMİZİN MAÇI VAR!"
-    else:
-        title = "FENERBAHÇEMİZİN YAKLAŞAN MAÇI"
-
-    if match["channels"]:
-        channel_text = " / ".join(match["channels"])
-    else:
-        channel_text = "Henüz belirtilmemiş"
-
-    # Tek satır, virgülle ayrılmış kompakt mevki formatı
+    # 1. Kadro Açıklandığında
     if notification_type == "LINEUPS" and lineup:
         gk_text = ", ".join(lineup.get("GK", [])) if lineup.get("GK") else "Açıklanıyor..."
         df_text = ", ".join(lineup.get("DF", [])) if lineup.get("DF") else "Açıklanıyor..."
@@ -521,7 +517,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None):
         fw_text = ", ".join(lineup.get("FW", [])) if lineup.get("FW") else "Açıklanıyor..."
 
         return (
-            f"📅 <b>{title}</b>\n\n"
+            f"📋 💛 <b>İLK 11'İMİZ BELLİ OLDU!</b> 💙\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
             f"⏰ <b>Saat:</b> {match['time']}\n"
@@ -532,16 +528,40 @@ def create_message(match, notification_type="UPCOMING", lineup=None):
             f"⚡️ <b>Hücum:</b> {fw_text}"
         )
 
-    if notification_type == "MATCH_ENDED":
+    # 2. Maça 15 Dk Kala
+    if notification_type == "STARTING_SOON":
         return (
-            f"📅 <b>{title}</b>\n\n"
+            f"🚨 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
-            f"🏆 <i>{match['competition']}</i>\n\n"
-            f"🟡🔵 Karşılaşma tamamlandı! Skor ve maç sonu özetini aşağıdaki butondan inceleyebilirsiniz."
+            f"🏆 <i>{match['competition']}</i>\n"
+            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"💛💙 <i>Haydi Fenerbahçe! Ekran başına geçme zamanı.</i>"
         )
 
+    # 3. Maç Sona Erdiğinde
+    if notification_type == "MATCH_ENDED":
+        return (
+            f"🏁 💛 <b>MAÇ SONA ERDİ!</b> 💙 🎉\n\n"
+            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"🏆 <i>{match['competition']}</i>\n\n"
+            f"🟡🔵 Karşılaşma tamamlandı! Skor ve maç sonu detaylarını aşağıdaki butondan inceleyebilirsiniz."
+        )
+
+    # 4. Sabah / Günlük Bildirim (MATCHDAY)
+    if notification_type == "MATCHDAY":
+        return (
+            f"📣 🟡 <b>BUGÜN FENERBAHÇEMİZİN MAÇI VAR!</b> 🔵\n\n"
+            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"🏆 <i>{match['competition']}</i>\n"
+            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
+            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"📺 <b>Kanal:</b> {channel_text}"
+        )
+
+    # 5. Gelecek Maç Bilgisi
     return (
-        f"📅 <b>{title}</b>\n\n"
+        f"📅 🟡 <b>FENERBAHÇEMİZİN YAKLAŞAN MAÇI</b> 🔵\n\n"
         f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
         f"🏆 <i>{match['competition']}</i>\n"
         f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
@@ -586,7 +606,7 @@ def check_and_notify():
     )
 
     channel_log = ", ".join(match["channels"]) if match["channels"] else "Belirtilmemiş"
-    print(f"    Kanal: {channel_log}\n    URL: {match['url']}", flush=True)
+    print(f"    Kanal (Öncelikli): {channel_log}\n    URL: {match['url']}", flush=True)
 
     state["next_match_date"] = match["date"]
 
