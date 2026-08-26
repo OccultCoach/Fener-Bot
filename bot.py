@@ -33,40 +33,11 @@ TIMEOUT = 15
 
 # Türkiye Resmi / Esas Yayıncı Öncelik Sıralaması
 CHANNEL_PRIORITY = [
-    # Türkiye Ulusal & Açık Kanallar
-    "TRT 1",
-    "TRT Spor",
-    "TRT Spor Yıldız",
-    "TV8,5",
-    "TV8.5",
-    "TV8",
-    "ATV",
-    "A Spor",
-    # Türkiye Resmi Dijital & Platform Yayıncıları
-    "Tabii Spor",
-    "Tabii",
-    "beIN Sports 1",
-    "beIN Sports 2",
-    "beIN Sports 3",
-    "beIN Sports 4",
-    "beIN Sports MAX 1",
-    "beIN Sports MAX 2",
-    "beIN Sports Haber",
-    "S Sport",
-    "S Sport 1",
-    "S Sport 2",
-    "S Sport Plus",
-    "Exxen",
-    "Tivibu Spor 1",
-    "Tivibu Spor 2",
-    "Tivibu Spor",
-    "Smart Spor 1",
-    "Smart Spor 2",
-    "Smart Spor",
-    "Spor Smart",
-    "FB TV",
-    # Yabancı / Uydu Yayıncılar
-    "CBC Sport",
+    "TRT 1", "TRT Spor", "TRT Spor Yıldız", "TV8,5", "TV8.5", "TV8", "ATV", "A Spor",
+    "Tabii Spor", "Tabii", "beIN Sports 1", "beIN Sports 2", "beIN Sports 3", "beIN Sports 4",
+    "beIN Sports MAX 1", "beIN Sports MAX 2", "beIN Sports Haber", "S Sport", "S Sport 1",
+    "S Sport 2", "S Sport Plus", "Exxen", "Tivibu Spor 1", "Tivibu Spor 2", "Tivibu Spor",
+    "Smart Spor 1", "Smart Spor 2", "Smart Spor", "Spor Smart", "FB TV", "CBC Sport",
 ]
 
 
@@ -85,11 +56,7 @@ def absolute_url(url):
 def get_page(url):
     print(f"[*] Sayfa okunuyor: {url}", flush=True)
     try:
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=TIMEOUT,
-        )
+        response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
         response.raise_for_status()
         print(f"[+] HTTP {response.status_code}", flush=True)
         return response.text
@@ -134,7 +101,7 @@ def send_telegram_message(message, reply_markup=None):
 
 
 def load_state():
-    default_state = {"notified_matches": [], "last_match_date": None}
+    default_state = {"notified_matches": []}
     if not os.path.exists(STATE_FILE):
         return default_state
     try:
@@ -159,12 +126,7 @@ def save_state(state):
 
 
 def canonical_channel_name(channel):
-    normalized = (
-        channel.lower()
-        .replace(" ", "")
-        .replace(".", "")
-        .replace(",", "")
-    )
+    normalized = channel.lower().replace(" ", "").replace(".", "").replace(",", "")
     mapping = {
         "beinsports1": "beIN Sports 1",
         "beinsports2": "beIN Sports 2",
@@ -179,15 +141,6 @@ def canonical_channel_name(channel):
     return mapping.get(normalized, channel)
 
 
-def sort_channels_by_priority(channels):
-    def get_priority(ch):
-        try:
-            return CHANNEL_PRIORITY.index(ch)
-        except ValueError:
-            return 999
-    return sorted(channels, key=get_priority)
-
-
 def detect_channels(text):
     text = normalize_text(text)
     detected = []
@@ -200,7 +153,13 @@ def detect_channels(text):
             if canonical not in detected:
                 detected.append(canonical)
     
-    return sort_channels_by_priority(detected)
+    def get_priority(ch):
+        try:
+            return CHANNEL_PRIORITY.index(ch)
+        except ValueError:
+            return 999
+
+    return sorted(detected, key=get_priority)
 
 
 def extract_broadcast_section(soup):
@@ -253,14 +212,16 @@ def parse_time_from_text(text):
     return f"{int(match.group(1)):02d}:{match.group(2)}"
 
 
-def detect_competition(text):
+def detect_competition(target_text):
+    """
+    Sadece URL ve ilgili maç başlığından/açıklamasından lig tespit eder.
+    """
     competitions = [
         "UEFA Şampiyonlar Ligi Play-Off",
         "UEFA Şampiyonlar Ligi Ön Eleme",
         "UEFA Şampiyonlar Ligi",
         "UEFA Avrupa Ligi Play-Off",
         "UEFA Avrupa Ligi",
-        "UEFA Avrupa Konferans Ligi",
         "UEFA Konferans Ligi",
         "Trendyol Süper Lig",
         "Süper Lig",
@@ -269,8 +230,8 @@ def detect_competition(text):
         "Süper Kupa",
     ]
     for comp in competitions:
-        pattern = r"\b" + re.escape(comp) + r"\b"
-        if re.search(pattern, text, flags=re.IGNORECASE):
+        pattern = r"(?i)\b" + re.escape(comp) + r"\b"
+        if re.search(pattern, target_text):
             return comp
     return "Futbol Müsabakası"
 
@@ -278,16 +239,10 @@ def detect_competition(text):
 def is_football_match(url, title_text):
     combined = f"{url} {title_text}".lower()
     non_football_keywords = [
-        "basketbol",
-        "euroleague",
-        "voleybol",
-        "sultanlar-ligi",
-        "efeler-ligi",
-        "kadinlar-basketbol",
+        "basketbol", "euroleague", "voleybol",
+        "sultanlar-ligi", "efeler-ligi", "kadinlar-basketbol",
     ]
-    if any(keyword in combined for keyword in non_football_keywords):
-        return False
-    return True
+    return not any(keyword in combined for keyword in non_football_keywords)
 
 
 def parse_teams_from_match_page(soup):
@@ -303,17 +258,8 @@ def parse_teams_from_match_page(soup):
             candidates.append(title_text)
 
     for text in candidates:
-        cleaned_text = re.sub(
-            r"\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4}",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        ).strip()
-        match = re.search(
-            r"(.+?)\s+(?:-|–|—|vs)\s+(.+?)(?:\s+maçı|\s+h?angi kanalda.*)?$",
-            cleaned_text,
-            flags=re.IGNORECASE,
-        )
+        cleaned = re.sub(r"\d{1,2}\s+[A-Za-zÇĞİÖŞÜçğıöşü]+\s+\d{4}", "", text, flags=re.IGNORECASE).strip()
+        match = re.search(r"(.+?)\s+(?:-|–|—|vs)\s+(.+?)(?:\s+maçı|\s+h?angi kanalda.*)?$", cleaned, flags=re.IGNORECASE)
         if match:
             home = normalize_text(match.group(1))
             away = normalize_text(match.group(2))
@@ -357,14 +303,13 @@ def parse_match_detail(url):
         print("[-] Maç saati bulunamadı.", flush=True)
         return None
 
-    competition = detect_competition(full_text)
     broadcast_section = extract_broadcast_section(soup)
+    target_comp_text = f"{url} {title_text} {broadcast_section or ''}"
+    competition = detect_competition(target_comp_text)
 
     if broadcast_section:
-        print(f"[+] Yayın bölümü bulundu: {broadcast_section}", flush=True)
         channels = detect_channels(broadcast_section)
     else:
-        print("[-] Yayın bölümü bulunamadı.", flush=True)
         channels = []
 
     return {
@@ -387,11 +332,10 @@ def get_match_links():
     links = []
     for link in soup.find_all("a", href=True):
         href = link.get("href", "")
-        if "/home/match/" not in href:
-            continue
-        href = absolute_url(href)
-        if href not in links:
-            links.append(href)
+        if "/home/match/" in href:
+            full_link = absolute_url(href)
+            if full_link not in links:
+                links.append(full_link)
 
     print(f"[+] {len(links)} adet maç linki bulundu.", flush=True)
     return links
@@ -412,18 +356,42 @@ def get_upcoming_matches_from_web():
     return matches
 
 
-def get_recent_fotmob_matches():
+def get_fotmob_all_matches():
     """
-    FotMob API'den Fenerbahçe'nin son oynanan veya devam eden maçlarını çeker.
+    FotMob'dan hem tamamlanan (previous/overview) hem de gelecek maçları toplar.
     """
     try:
         team_url = "https://www.fotmob.com/api/teams?id=8695"
         resp = requests.get(team_url, headers=HEADERS, timeout=10)
         if resp.status_code != 200:
             return []
-        
-        fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
-        return fixtures
+
+        data = resp.json()
+        all_matches = []
+
+        # 1. Overview sekmesindeki fikstürler
+        overview_fixes = data.get("overview", {}).get("overviewFixtures", [])
+        if isinstance(overview_fixes, list):
+            all_matches.extend(overview_fixes)
+
+        # 2. Fixtures -> previousFixtures (Biten maçlar)
+        prev_fixes = data.get("fixtures", {}).get("previousFixtures", [])
+        if isinstance(prev_fixes, list):
+            all_matches.extend(prev_fixes)
+
+        # 3. Fixtures -> allFixtures -> fixtures (Gelecek maçlar)
+        upcoming_fixes = data.get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
+        if isinstance(upcoming_fixes, list):
+            all_matches.extend(upcoming_fixes)
+
+        # Tekil match ID'lere göre filtrele
+        unique_matches = {}
+        for m in all_matches:
+            m_id = m.get("id")
+            if m_id and m_id not in unique_matches:
+                unique_matches[m_id] = m
+
+        return list(unique_matches.values())
     except Exception as e:
         print(f"[-] FotMob maç listesi alınamadı: {e}", flush=True)
         return []
@@ -457,7 +425,6 @@ def get_fotmob_match_details(match_id):
         lineup_roles = None
         
         if lineup_data and lineup_data.get("lineup"):
-            # Fenerbahçe indexini bul
             home_name = teams[0].get("name", "").lower() if teams else ""
             is_fb_home = "fenerbah" in home_name
             team_lineup = lineup_data.get("lineup", [])[0 if is_fb_home else 1]
@@ -580,9 +547,9 @@ def check_and_notify():
     state = load_state()
     notified_matches = state.get("notified_matches", [])
 
-    # ADIM 1: FotMob üzerinden son biten maçın durumunu kontrol et (Web'den silinse bile yakalar)
-    fotmob_fixtures = get_recent_fotmob_matches()
-    for fix in fotmob_fixtures:
+    # ADIM 1: FotMob üzerinden son biten maç kontrolü
+    fotmob_matches = get_fotmob_all_matches()
+    for fix in fotmob_matches:
         fix_utc_str = fix.get("status", {}).get("utcTime", "")
         if not fix_utc_str:
             continue
@@ -594,8 +561,8 @@ def check_and_notify():
 
         time_diff = (match_dt - now_tr).total_seconds() / 60
         
-        # Eğer maç başlamış ve üzerinden en fazla 3.5 saat geçmişse:
-        if -220 <= time_diff <= 0:
+        # Son 5 saat içinde başlamış bir maç var mı?
+        if -300 <= time_diff <= 0:
             match_id = fix.get("id")
             lineup_data, is_finished, score_data = get_fotmob_match_details(match_id)
             
@@ -625,7 +592,7 @@ def check_and_notify():
                     notified_matches.append(ended_key)
                     state["notified_matches"] = notified_matches[-100:]
                     save_state(state)
-                    print("[+] Maç sonu bildirimi gönderildi ve kaydedildi.", flush=True)
+                    print("[+] Maç sonu bildirimi gönderildi ve kaydedildi.\n" + "=" * 60, flush=True)
                     return
 
     # ADIM 2: Yaklaşan Maç Kontrolü (Sporekrani.com)
@@ -636,7 +603,7 @@ def check_and_notify():
 
     match = web_matches[0]
     print(
-        f"\n[+] Yaklaşan maç:\n"
+        f"\n[+] İncelenen maç:\n"
         f"    {match['home']} - {match['away']}\n"
         f"    Tarih: {match['date']}\n"
         f"    Saat: {match['time']}\n"
