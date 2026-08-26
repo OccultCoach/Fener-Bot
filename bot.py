@@ -670,8 +670,8 @@ def check_and_notify():
         notification_type = "MATCH_ENDED"
         final_score = score_data
 
-    # 2. Maça Başlamak Üzere & İlk 11 (Maça 0 - 20 dk kala tek birleşik mesaj)
-    elif is_today and 0 <= time_diff_minutes <= 20:
+    # 2. Maça Başlamak Üzere & İlk 11 (Maça 0 - 15 dk kala tek birleşik mesaj)
+    elif is_today and 0 <= time_diff_minutes <= 15:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
