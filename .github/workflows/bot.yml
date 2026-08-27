@@ -5,8 +5,10 @@ on:
     # 1. Sabah 09:29 (06:29 UTC) - Günlük kontrol
     - cron: '29 6 * * *'
 
-    # 2. Türkiye saatiyle 13:00 - 02:59 arası (UTC 10:00 - 23:59) her 15 dakikada bir
-    # Gece uzayan ve penaltılara giden maçları da eksiksiz kapsar
+    # 2. 7/24 Kesintisiz Canlılık: Her 4 saatte bir genel yoklama (01:29, 05:29, 09:29, 13:29, 17:29, 21:29 TR)
+    - cron: '29 2,6,10,14,18,22 * * *'
+
+    # 3. Maç Saatleri (13:00 - 02:59 TR / 10:00 - 23:59 UTC): Her 15 dakikada bir kontrol
     - cron: '14,29,44,59 10-23 * * *'
 
   # Manuel çalıştırma butonu
