@@ -255,17 +255,14 @@ def detect_competition(url, soup):
 
 def is_football_match(url, title_text):
     combined = f"{url} {title_text}".lower()
-    
-    # Diğer branşlar, kadın futbolu, alt yaş ve hazırlık filtreleri
     excluded_keywords = [
         "basketbol", "euroleague", "voleybol",
         "sultanlar-ligi", "efeler-ligi", "kadinlar-basketbol",
         "kadin", "kadın", "fomget", "petrol-ofisi", "kadinlar-futbol",
-        "u19", "u21", "rezerv", "akademi", "ampute",
+        "turkcell-kadin", "u19", "u21", "rezerv", "akademi", "ampute",
     ]
     if any(keyword in combined for keyword in excluded_keywords):
         return False
-
     return True
 
 
