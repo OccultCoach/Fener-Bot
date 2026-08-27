@@ -2,12 +2,12 @@ name: Fenerbahçe Bot
 
 on:
   schedule:
-    # 1. Sabah 09:30 (06:30 UTC) - Günlük genel kontrol ve "Bugün Maç Var" bildirimi
-    - cron: '30 6 * * *'
+    # 1. Sabah 09:29 (06:29 UTC) - Günlük kontrol
+    - cron: '29 6 * * *'
 
-    # 2. Türkiye saatiyle 13:00 - 01:30 arası her 15 dakikada bir (10:00 - 22:30 UTC)
-    # Gündüz, akşam ve uzatmalara giden gece maçlarının bitiş düdüğünü eksiksiz yakalar
-    - cron: '*/15 10-22 * * *'
+    # 2. Türkiye saatiyle 13:00 - 01:30 arası (UTC 10:00 - 22:30) her 15 dakikada bir
+    # 29'uncu dakikaya hizalı: 14, 29, 44, 59
+    - cron: '14,29,44,59 10-22 * * *'
 
   # Manuel çalıştırma butonu
   workflow_dispatch:
