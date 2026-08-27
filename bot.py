@@ -221,10 +221,6 @@ def parse_time_from_text(text):
 
 
 def detect_competition(url, soup):
-    """
-    Yan menü ve footer kirliliğinden etkilenmemek için 
-    sadece URL, başlıklar ve yayın paragrafında arama yapar.
-    """
     parts = [url]
     if soup.title:
         parts.append(soup.title.get_text(" ", strip=True))
@@ -385,34 +381,52 @@ def get_next_fenerbahce_match():
     return upcoming[0]
 
 
-def get_score_from_mackolik_and_backups(match):
+def get_score_from_domestic_sources(match):
     """
-    1. Öncelikli Kaynak: Mackolik
-    2. Yedek Kaynak: Spor Ekranı maç detay sayfası
-    3. Son Emniyet Kemeri: Fanatik / Spor Portalları
+    Sorunsuz çalışan 3 Katmanlı Yerli Skor Çekme Mekanizması:
+    1. NTV Spor (Statik ve hızlı arama)
+    2. Fotomaç (Hızlı yerli spor bülteni)
+    3. Spor Ekranı Detay Sayfası
     """
     home = match["home"]
     away = match["away"]
     
-    # 1. MACKOLİK
-    print(f"[*] 1. Öncelikli Kaynak taranıyor (Mackolik): {home} - {away}", flush=True)
+    # 1. NTV SPOR
+    print(f"[*] 1. Yerli Kaynak taranıyor (NTV Spor): {home} - {away}", flush=True)
     try:
-        mackolik_search_url = f"https://www.mackolik.com/arama?q={requests.utils.quote(home + ' ' + away)}"
-        resp = requests.get(mackolik_search_url, headers=HEADERS, timeout=10)
+        ntv_url = f"https://www.ntvspor.net/arama?q={requests.utils.quote(home + ' ' + away + ' maç sonucu')}"
+        resp = requests.get(ntv_url, headers=HEADERS, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            score_divs = soup.find_all(text=re.compile(r"\d+\s*-\s*\d+"))
-            for text in score_divs:
-                match_score = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", text)
-                if match_score:
-                    found = f"{home} {match_score.group(1)} - {match_score.group(2)} {away}"
-                    print(f"[+] Mackolik'ten skor alındı: {found}", flush=True)
+            for tag in soup.find_all(["h2", "h3", "p", "span"]):
+                text = tag.get_text()
+                score_match = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", text)
+                if score_match:
+                    found = f"{home} {score_match.group(1)} - {score_match.group(2)} {away}"
+                    print(f"[+] NTV Spor'dan skor alındı: {found}", flush=True)
                     return found
     except Exception as e:
-        print(f"[-] Mackolik bağlantı hatası: {e}", flush=True)
+        print(f"[-] NTV Spor arama hatası: {e}", flush=True)
 
-    # 2. SPOR EKRANI
-    print(f"[*] 2. Yedek Kaynak taranıyor (Spor Ekranı)...", flush=True)
+    # 2. FOTOMAÇ
+    print(f"[*] 2. Yerli Kaynak taranıyor (Fotomaç)...", flush=True)
+    try:
+        fotomac_url = f"https://www.fotomac.com.tr/arama?query={requests.utils.quote(home + ' ' + away + ' maç sonucu')}"
+        resp = requests.get(fotomac_url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup.find_all(["h2", "h3", "p", "a"]):
+                text = tag.get_text()
+                score_match = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", text)
+                if score_match:
+                    found = f"{home} {score_match.group(1)} - {score_match.group(2)} {away}"
+                    print(f"[+] Fotomaç'tan skor alındı: {found}", flush=True)
+                    return found
+    except Exception as e:
+        print(f"[-] Fotomaç arama hatası: {e}", flush=True)
+
+    # 3. SPOR EKRANI DETAY SAYFASI
+    print(f"[*] 3. Yerli Kaynak taranıyor (Spor Ekranı)...", flush=True)
     try:
         html = get_page(match["url"])
         if html:
@@ -424,24 +438,7 @@ def get_score_from_mackolik_and_backups(match):
                 print(f"[+] Spor Ekranı'ndan skor alındı: {found}", flush=True)
                 return found
     except Exception as e:
-        print(f"[-] Yedek kaynak hatası: {e}", flush=True)
-
-    # 3. FANATİK / SPOR PORTALLARI
-    print(f"[*] 3. Yedek Kaynak taranıyor (Spor Portalları)...", flush=True)
-    try:
-        portal_url = f"https://www.fanatik.com.tr/arama?q={requests.utils.quote(home + ' ' + away + ' maç sonucu')}"
-        resp = requests.get(portal_url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for p in soup.find_all(["p", "h2", "span"]):
-                text = p.get_text()
-                score_match = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", text)
-                if score_match:
-                    found = f"{home} {score_match.group(1)} - {score_match.group(2)} {away}"
-                    print(f"[+] Spor portalından skor alındı: {found}", flush=True)
-                    return found
-    except Exception:
-        pass
+        print(f"[-] Spor Ekranı yedek hatası: {e}", flush=True)
 
     return f"{home} - {away}"
 
@@ -649,7 +646,8 @@ def check_and_notify():
     if time_diff_minutes <= 45:
         lineup_data, is_match_finished, score_data = get_live_match_data(match)
 
-    is_fallback_ended = (time_diff_minutes <= -110)
+    # Güvenli maç sonu sınırı (Uzatmalar ve penaltılar için -140 dk)
+    is_fallback_ended = (time_diff_minutes <= -140)
 
     # 1. Maç Sonu
     if (time_diff_minutes <= -85 and is_match_finished) or is_fallback_ended:
@@ -659,7 +657,7 @@ def check_and_notify():
         if score_data:
             final_score = score_data
         else:
-            final_score = get_score_from_mackolik_and_backups(match)
+            final_score = get_score_from_domestic_sources(match)
 
     # 2. Maça Başlamak Üzere (0 - 15 dk kala)
     elif is_today and 0 <= time_diff_minutes <= 15:
