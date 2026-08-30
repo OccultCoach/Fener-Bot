@@ -385,12 +385,6 @@ def get_next_fenerbahce_match():
 
 
 def get_score_from_domestic_sources(match):
-    """
-    Sorunsuz çalışan 3 Katmanlı Yerli Skor Çekme Mekanizması:
-    1. NTV Spor (Statik ve hızlı arama)
-    2. Fotomaç (Hızlı yerli spor bülteni)
-    3. Spor Ekranı Detay Sayfası
-    """
     home = match["home"]
     away = match["away"]
     
@@ -446,33 +440,70 @@ def get_score_from_domestic_sources(match):
     return f"{home} - {away}"
 
 
-def get_fallback_lineup_text(match):
-    print("[*] FotMob'dan kadro alınamadı. Yerli kaynaklardan (Fotomaç) ilk 11 aranıyor...", flush=True)
-    home = match["home"]
-    away = match["away"]
-    query = requests.utils.quote(f"{home} {away} ilk 11")
-    
+def get_sporx_lineup(match):
+    print("[*] 2. Kaynak Taranıyor: Sporx ilk 11...", flush=True)
     try:
-        url = f"https://www.fotomac.com.tr/arama?query={query}"
+        url = "https://www.sporx.com/fenerbahce-fiksturu"
         resp = requests.get(url, headers=HEADERS, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            for tag in soup.find_all(["p", "h2", "div"]):
-                text = normalize_text(tag.get_text())
-                if "fenerbahçe" in text.lower() and "11" in text.lower() and len(text) > 40:
-                    print("[+] Yerli kaynaktan metin tabanlı ilk 11 bulundu.", flush=True)
-                    return text
+            for a in soup.find_all("a", href=True):
+                if "/canli/" in a["href"] or "/mac/" in a["href"]:
+                    match_page_url = absolute_url(a["href"]) if a["href"].startswith("/") else a["href"]
+                    m_resp = requests.get(match_page_url, headers=HEADERS, timeout=10)
+                    if m_resp.status_code == 200:
+                        m_soup = BeautifulSoup(m_resp.text, "html.parser")
+                        text = normalize_text(m_soup.get_text())
+                        if "ilk 11" in text.lower() and "fenerbahçe" in text.lower():
+                            for tag in m_soup.find_all(["div", "p", "ul"]):
+                                t = normalize_text(tag.get_text(" ", strip=True))
+                                if "ilk 11" in t.lower() and len(t) > 50 and len(t) < 400:
+                                    print("[+] Sporx üzerinden ilk 11 bulundu.", flush=True)
+                                    return t
     except Exception as e:
-        print(f"[-] Yerli 11 araması başarısız: {e}", flush=True)
+        print(f"[-] Sporx tarama hatası: {e}", flush=True)
+    return None
+
+
+def get_fallback_lineup_text(match):
+    # Önce Sporx Canlı Maç Sayfası
+    sporx_result = get_sporx_lineup(match)
+    if sporx_result:
+        return sporx_result
+
+    # Bulunamazsa NTV Spor ve Fotomaç Haber Paragrafları
+    print("[*] 3. Kaynak Taranıyor: Yerli haber bültenleri (NTV Spor & Fotomaç)...", flush=True)
+    home = match["home"]
+    away = match["away"]
+    query = requests.utils.quote(f"{home} {away} ilk 11 kadrosu")
+    garbage_keywords = ["arama sonuç", "adet içerik", "en yeniler", "tüm sonuçlar", "sayfa", "kategori", "yazar"]
+    
+    try:
+        url = f"https://www.ntvspor.net/arama?q={query}"
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                if "/futbol/" in href or "/haber/" in href:
+                    article_url = absolute_url(href) if not href.startswith("http") else href
+                    art_resp = requests.get(article_url, headers=HEADERS, timeout=10)
+                    if art_resp.status_code == 200:
+                        art_soup = BeautifulSoup(art_resp.text, "html.parser")
+                        for p in art_soup.find_all("p"):
+                            text = normalize_text(p.get_text())
+                            if "fenerbahçe" in text.lower() and any(w in text.lower() for w in ["livakovic", "irfan can", "dzeko", "tadic", "fred", "szymanski", "en-nesyri"]):
+                                if not any(g in text.lower() for g in garbage_keywords) and len(text) > 30:
+                                    print("[+] Haber detayından doğrulanmış kadro metni bulundu.", flush=True)
+                                    return text
+    except Exception as e:
+        print(f"[-] Haber arama hatası: {e}", flush=True)
     return None
 
 
 def get_live_match_data(match, retries=2):
-    """
-    SADECE FotMob İlk 11 verisi için 2 dakikalık retry döngüsü.
-    """
     for attempt in range(retries + 1):
-        print(f"[*] FotMob ilk 11 taranıyor (Deneme {attempt+1}/{retries+1})...", flush=True)
+        print(f"[*] 1. Kaynak Taranıyor: FotMob ilk 11 (Deneme {attempt+1}/{retries+1})...", flush=True)
         try:
             team_url = "https://www.fotmob.com/api/teams?id=8695"
             resp = requests.get(team_url, headers=HEADERS, timeout=10)
@@ -536,12 +567,12 @@ def get_live_match_data(match, retries=2):
                                 print("[+] FotMob'dan ilk 11 başarıyla alındı.", flush=True)
                                 return lineup_roles, is_finished, score_text
 
-            print("[-] FotMob'da ilk 11 henüz yayınlanmamış veya API yanıt vermedi.", flush=True)
+            print("[-] FotMob'da ilk 11 henüz doğrulanmadı.", flush=True)
         except Exception as e:
             print(f"[-] FotMob bağlantı hatası: {e}", flush=True)
 
         if attempt < retries:
-            print("[*] 2 dakika (120 sn) sonra FotMob tekrar denenecek...", flush=True)
+            print("[*] 2 dakika beklenip tekrar denenecek...", flush=True)
             time.sleep(120)
 
     return None, False, None
@@ -591,7 +622,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
                 f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
                 f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
             )
-        elif isinstance(lineup, str):
+        elif isinstance(lineup, str) and len(lineup.strip()) > 0:
             lineup_block = f"📋 <b>İLK 11 BİLGİSİ:</b>\n<i>{lineup}</i>\n\n"
 
         return (
@@ -645,10 +676,7 @@ def check_and_notify():
     # --- ERKEN ÇIKIŞ (EARLY EXIT) KONTROLÜ ---
     next_match_date = state.get("next_match_date")
     
-    # Eğer sistemde kayıtlı bir sonraki maç varsa VE bu maç bugünden ileriki bir tarihteyse:
     if next_match_date and next_match_date > today_str:
-        # Sadece sabah 10:14 (10:00 - 10:29 arası) tetiklemesinde fikstür güncellemesi için izin ver.
-        # Günün geri kalanındaki çalışmalarda siteleri yorma, doğrudan kapan.
         if not (now_tr.hour == 10 and now_tr.minute < 30):
             print(f"[*] Bugün maç yok. Sıradaki maç tarihi: {next_match_date}", flush=True)
             print("[*] Erken Çıkış (Early Exit): Gereksiz veri çekimi engellendi, bot uykuya dönüyor.", flush=True)
@@ -710,7 +738,7 @@ def check_and_notify():
         notification_type = "STARTING_SOON"
         lineup = lineup_data
         
-        # FotMob 2 denemede de kadroyu veremediyse yerli metin yedeğini çağır
+        # FotMob veremezse Sporx ve NTV Spor yedeğini devreye sok
         if not lineup:
             lineup = get_fallback_lineup_text(match)
 
