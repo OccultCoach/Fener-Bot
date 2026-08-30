@@ -426,6 +426,65 @@ def get_score_from_domestic_sources(match):
     return None
 
 
+def get_sporx_lineup(match):
+    print("[*] 2. Kaynak Taranıyor: Sporx ilk 11...", flush=True)
+    try:
+        url = "https://www.sporx.com/fenerbahce-fiksturu"
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                if "/canli/" in a["href"] or "/mac/" in a["href"]:
+                    match_page_url = absolute_url(a["href"]) if a["href"].startswith("/") else a["href"]
+                    m_resp = requests.get(match_page_url, headers=HEADERS, timeout=10)
+                    if m_resp.status_code == 200:
+                        m_soup = BeautifulSoup(m_resp.text, "html.parser")
+                        text = normalize_text(m_soup.get_text())
+                        if "ilk 11" in text.lower() and "fenerbahçe" in text.lower():
+                            for tag in m_soup.find_all(["div", "p", "ul"]):
+                                t = normalize_text(tag.get_text(" ", strip=True))
+                                if "ilk 11" in t.lower() and len(t) > 50 and len(t) < 400:
+                                    print("[+] Sporx üzerinden ilk 11 bulundu.", flush=True)
+                                    return t
+    except Exception as e:
+        print(f"[-] Sporx tarama hatası: {e}", flush=True)
+    return None
+
+
+def get_fallback_lineup_text(match):
+    sporx_result = get_sporx_lineup(match)
+    if sporx_result:
+        return sporx_result
+
+    print("[*] 3. Kaynak Taranıyor: Yerli haber bültenleri (NTV Spor & Fotomaç)...", flush=True)
+    home = match["home"]
+    away = match["away"]
+    query = requests.utils.quote(f"{home} {away} ilk 11 kadrosu")
+    garbage_keywords = ["arama sonuç", "adet içerik", "en yeniler", "tüm sonuçlar", "sayfa", "kategori", "yazar"]
+    
+    try:
+        url = f"https://www.ntvspor.net/arama?q={query}"
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                if "/futbol/" in href or "/haber/" in href:
+                    article_url = absolute_url(href) if not href.startswith("http") else href
+                    art_resp = requests.get(article_url, headers=HEADERS, timeout=10)
+                    if art_resp.status_code == 200:
+                        art_soup = BeautifulSoup(art_resp.text, "html.parser")
+                        for p in art_soup.find_all("p"):
+                            text = normalize_text(p.get_text())
+                            if "fenerbahçe" in text.lower() and any(w in text.lower() for w in ["livakovic", "irfan can", "dzeko", "tadic", "fred", "szymanski", "en-nesyri"]):
+                                if not any(g in text.lower() for g in garbage_keywords) and len(text) > 30:
+                                    print("[+] Haber detayından doğrulanmış kadro metni bulundu.", flush=True)
+                                    return text
+    except Exception as e:
+        print(f"[-] Haber arama hatası: {e}", flush=True)
+    return None
+
+
 def get_live_match_data(match, fetch_lineup=True):
     retries = 2 if fetch_lineup else 0
     for attempt in range(retries + 1):
@@ -512,12 +571,21 @@ def get_highlights_url(match):
     competition = match.get("competition", "")
     home = match.get("home", "")
     away = match.get("away", "")
-    match_year = match.get("date", "").split("-")[0]
     
+    # Sezon hesabı: Temmuz ve sonrasındaki maçlar yeni sezonun ilk yılıdır
+    try:
+        match_dt = date.fromisoformat(match.get("date", ""))
+        if match_dt.month >= 7:
+            season_str = f"{match_dt.year}-{match_dt.year + 1} sezonu"
+        else:
+            season_str = f"{match_dt.year - 1}-{match_dt.year} sezonu"
+    except Exception:
+        season_str = ""
+
     if "Süper Lig" in competition or "Türkiye Kupası" in competition:
-        search_query = f"{home} {away} {match_year} maç özeti beIN SPORTS Türkiye"
+        search_query = f"{home} {away} {season_str} maç özeti beIN SPORTS Türkiye"
     else:
-        search_query = f"{home} {away} {match_year} maç özeti TRT Spor Tabii Spor"
+        search_query = f"{home} {away} {season_str} maç özeti TRT Spor Tabii Spor"
         
     encoded_query = requests.utils.quote(search_query)
     return f"https://www.youtube.com/results?search_query={encoded_query}"
