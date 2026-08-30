@@ -466,12 +466,10 @@ def get_sporx_lineup(match):
 
 
 def get_fallback_lineup_text(match):
-    # Önce Sporx Canlı Maç Sayfası
     sporx_result = get_sporx_lineup(match)
     if sporx_result:
         return sporx_result
 
-    # Bulunamazsa NTV Spor ve Fotomaç Haber Paragrafları
     print("[*] 3. Kaynak Taranıyor: Yerli haber bültenleri (NTV Spor & Fotomaç)...", flush=True)
     home = match["home"]
     away = match["away"]
@@ -501,9 +499,11 @@ def get_fallback_lineup_text(match):
     return None
 
 
-def get_live_match_data(match, retries=2):
+def get_live_match_data(match, fetch_lineup=True):
+    retries = 2 if fetch_lineup else 0
     for attempt in range(retries + 1):
-        print(f"[*] 1. Kaynak Taranıyor: FotMob ilk 11 (Deneme {attempt+1}/{retries+1})...", flush=True)
+        if fetch_lineup:
+            print(f"[*] 1. Kaynak Taranıyor: FotMob ilk 11 (Deneme {attempt+1}/{retries+1})...", flush=True)
         try:
             team_url = "https://www.fotmob.com/api/teams?id=8695"
             resp = requests.get(team_url, headers=HEADERS, timeout=10)
@@ -545,33 +545,37 @@ def get_live_match_data(match, retries=2):
                                 if home_score != "" and away_score != "":
                                     score_text = f"{home_team} {home_score} - {away_score} {away_team}"
 
-                        content = m_data.get("content", {})
-                        lineup_data = content.get("lineup", {})
-                        is_home = "fenerbahçe" in match["home"].lower()
-                        team_lineup = lineup_data.get("lineup", [])[0 if is_home else 1] if lineup_data.get("lineup") else None
-
                         lineup_roles = None
-                        if team_lineup and team_lineup.get("players"):
-                            roles = {"GK": [], "DF": [], "MF": [], "FW": []}
-                            for row in team_lineup.get("players", []):
-                                for p in row:
-                                    name = p.get("name", {}).get("fullName") or p.get("name", {}).get("lastName", "")
-                                    role = p.get("role", "MF")
-                                    if role in roles:
-                                        roles[role].append(name)
-                                    else:
-                                        roles["MF"].append(name)
+                        if fetch_lineup:
+                            content = m_data.get("content", {})
+                            lineup_data = content.get("lineup", {})
+                            is_home = "fenerbahçe" in match["home"].lower()
+                            team_lineup = lineup_data.get("lineup", [])[0 if is_home else 1] if lineup_data.get("lineup") else None
 
-                            if sum(len(v) for v in roles.values()) == 11 and len(roles["GK"]) >= 1:
-                                lineup_roles = roles
-                                print("[+] FotMob'dan ilk 11 başarıyla alındı.", flush=True)
-                                return lineup_roles, is_finished, score_text
+                            if team_lineup and team_lineup.get("players"):
+                                roles = {"GK": [], "DF": [], "MF": [], "FW": []}
+                                for row in team_lineup.get("players", []):
+                                    for p in row:
+                                        name = p.get("name", {}).get("fullName") or p.get("name", {}).get("lastName", "")
+                                        role = p.get("role", "MF")
+                                        if role in roles:
+                                            roles[role].append(name)
+                                        else:
+                                            roles["MF"].append(name)
 
-            print("[-] FotMob'da ilk 11 henüz doğrulanmadı.", flush=True)
+                                if sum(len(v) for v in roles.values()) == 11 and len(roles["GK"]) >= 1:
+                                    lineup_roles = roles
+                                    print("[+] FotMob'dan ilk 11 başarıyla alındı.", flush=True)
+                                    return lineup_roles, is_finished, score_text
+
+                        return lineup_roles, is_finished, score_text
+
+            if fetch_lineup:
+                print("[-] FotMob'da ilk 11 henüz doğrulanmadı.", flush=True)
         except Exception as e:
             print(f"[-] FotMob bağlantı hatası: {e}", flush=True)
 
-        if attempt < retries:
+        if fetch_lineup and attempt < retries:
             print("[*] 2 dakika beklenip tekrar denenecek...", flush=True)
             time.sleep(120)
 
@@ -715,9 +719,12 @@ def check_and_notify():
     lineup = None
     final_score = None
 
+    # Sadece maç önünde ilk 11 aranır (0 ile 45 dk kala)
+    should_fetch_lineup = (0 <= time_diff_minutes <= 45)
+    
     lineup_data, is_match_finished, score_data = (None, False, None)
-    if time_diff_minutes <= 45:
-        lineup_data, is_match_finished, score_data = get_live_match_data(match)
+    if should_fetch_lineup or time_diff_minutes <= -85:
+        lineup_data, is_match_finished, score_data = get_live_match_data(match, fetch_lineup=should_fetch_lineup)
 
     # Güvenli maç sonu sınırı (Uzatmalar ve penaltılar için -140 dk)
     is_fallback_ended = (time_diff_minutes <= -140)
@@ -738,7 +745,6 @@ def check_and_notify():
         notification_type = "STARTING_SOON"
         lineup = lineup_data
         
-        # FotMob veremezse Sporx ve NTV Spor yedeğini devreye sok
         if not lineup:
             lineup = get_fallback_lineup_text(match)
 
