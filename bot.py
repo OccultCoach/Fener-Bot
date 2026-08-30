@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -53,16 +54,20 @@ def absolute_url(url):
     return BASE_URL + "/" + url
 
 
-def get_page(url):
-    print(f"[*] Sayfa okunuyor: {url}", flush=True)
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
-        response.raise_for_status()
-        print(f"[+] HTTP {response.status_code}", flush=True)
-        return response.text
-    except requests.RequestException as e:
-        print(f"[-] Sayfa alınamadı: {e}", flush=True)
-        return None
+def get_page(url, retries=2):
+    for attempt in range(retries + 1):
+        print(f"[*] Sayfa okunuyor (Deneme {attempt+1}/{retries+1}): {url}", flush=True)
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+            response.raise_for_status()
+            print(f"[+] HTTP {response.status_code}", flush=True)
+            return response.text
+        except requests.RequestException as e:
+            print(f"[-] Sayfa alınamadı: {e}", flush=True)
+            if attempt < retries:
+                print(f"[*] Bağlantı hatası. 2 dakika (120 sn) bekleniyor...", flush=True)
+                time.sleep(120)
+    return None
 
 
 def send_telegram_message(message, reply_markup=None):
@@ -445,6 +450,27 @@ def get_score_from_domestic_sources(match):
     return f"{home} - {away}"
 
 
+def get_fallback_lineup_text(match):
+    print("[*] FotMob'dan kadro alınamadı. Yerli kaynaklardan metin tabanlı ilk 11 aranıyor...", flush=True)
+    home = match["home"]
+    away = match["away"]
+    query = requests.utils.quote(f"{home} {away} ilk 11")
+    
+    try:
+        url = f"https://www.fotomac.com.tr/arama?query={query}"
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup.find_all(["p", "h2", "div"]):
+                text = normalize_text(tag.get_text())
+                if "fenerbahçe" in text.lower() and "11" in text.lower() and len(text) > 40:
+                    print("[+] Yerli kaynaktan metin tabanlı ilk 11 bulundu.", flush=True)
+                    return text
+    except Exception as e:
+        print(f"[-] Yerli 11 araması başarısız: {e}", flush=True)
+    return None
+
+
 def get_live_match_data(match):
     try:
         team_url = "https://www.fotmob.com/api/teams?id=8695"
@@ -550,7 +576,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
 
     if notification_type == "STARTING_SOON":
         lineup_block = ""
-        if lineup:
+        if isinstance(lineup, dict):
             gk_text = ", ".join(lineup.get("GK", []))
             df_text = ", ".join(lineup.get("DF", []))
             mf_text = ", ".join(lineup.get("MF", []))
@@ -562,6 +588,8 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
                 f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
                 f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
             )
+        elif isinstance(lineup, str):
+            lineup_block = f"📋 <b>İLK 11 BİLGİSİ:</b>\n<i>{lineup}</i>\n\n"
 
         return (
             f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
@@ -611,18 +639,17 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
-    # --- YENİ EKLENEN: ERKEN ÇIKIŞ (EARLY EXIT) KONTROLÜ ---
+    # --- ERKEN ÇIKIŞ (EARLY EXIT) KONTROLÜ ---
     next_match_date = state.get("next_match_date")
     
     # Eğer sistemde kayıtlı bir sonraki maç varsa VE bu maç bugünden ileriki bir tarihteyse:
     if next_match_date and next_match_date > today_str:
         # Sadece sabah 10:14 (10:00 - 10:29 arası) tetiklemesinde fikstür güncellemesi için izin ver.
-        # Günün geri kalanındaki 67 çalışmada siteleri yorma, doğrudan kapan.
+        # Günün geri kalanındaki çalışmalarda siteleri yorma, doğrudan kapan.
         if not (now_tr.hour == 10 and now_tr.minute < 30):
             print(f"[*] Bugün maç yok. Sıradaki maç tarihi: {next_match_date}", flush=True)
             print("[*] Erken Çıkış (Early Exit): Gereksiz veri çekimi engellendi, bot uykuya dönüyor.", flush=True)
             return
-    # --------------------------------------------------------
 
     match = get_next_fenerbahce_match()
     if not match:
@@ -679,6 +706,10 @@ def check_and_notify():
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
+        
+        # FotMob kadroyu veremediyse yerli metin yedeğini çağır
+        if not lineup:
+            lineup = get_fallback_lineup_text(match)
 
     # 3. Maç Günü Sabahı
     elif is_today and now_tr.hour >= 10:
