@@ -54,20 +54,16 @@ def absolute_url(url):
     return BASE_URL + "/" + url
 
 
-def get_page(url, retries=2):
-    for attempt in range(retries + 1):
-        print(f"[*] Sayfa okunuyor (Deneme {attempt+1}/{retries+1}): {url}", flush=True)
-        try:
-            response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
-            response.raise_for_status()
-            print(f"[+] HTTP {response.status_code}", flush=True)
-            return response.text
-        except requests.RequestException as e:
-            print(f"[-] Sayfa alınamadı: {e}", flush=True)
-            if attempt < retries:
-                print(f"[*] Bağlantı hatası. 2 dakika (120 sn) bekleniyor...", flush=True)
-                time.sleep(120)
-    return None
+def get_page(url):
+    print(f"[*] Sayfa okunuyor: {url}", flush=True)
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        response.raise_for_status()
+        print(f"[+] HTTP {response.status_code}", flush=True)
+        return response.text
+    except requests.RequestException as e:
+        print(f"[-] Sayfa alınamadı: {e}", flush=True)
+        return None
 
 
 def send_telegram_message(message, reply_markup=None):
@@ -451,7 +447,7 @@ def get_score_from_domestic_sources(match):
 
 
 def get_fallback_lineup_text(match):
-    print("[*] FotMob'dan kadro alınamadı. Yerli kaynaklardan metin tabanlı ilk 11 aranıyor...", flush=True)
+    print("[*] FotMob'dan kadro alınamadı. Yerli kaynaklardan (Fotomaç) ilk 11 aranıyor...", flush=True)
     home = match["home"]
     away = match["away"]
     query = requests.utils.quote(f"{home} {away} ilk 11")
@@ -471,77 +467,84 @@ def get_fallback_lineup_text(match):
     return None
 
 
-def get_live_match_data(match):
-    try:
-        team_url = "https://www.fotmob.com/api/teams?id=8695"
-        resp = requests.get(team_url, headers=HEADERS, timeout=10)
-        if resp.status_code != 200:
-            return None, False, None
+def get_live_match_data(match, retries=2):
+    """
+    SADECE FotMob İlk 11 verisi için 2 dakikalık retry döngüsü.
+    """
+    for attempt in range(retries + 1):
+        print(f"[*] FotMob ilk 11 taranıyor (Deneme {attempt+1}/{retries+1})...", flush=True)
+        try:
+            team_url = "https://www.fotmob.com/api/teams?id=8695"
+            resp = requests.get(team_url, headers=HEADERS, timeout=10)
+            if resp.status_code == 200:
+                fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
+                match_id = None
+                
+                for fix in fixtures:
+                    fix_utc_str = fix.get("status", {}).get("utcTime", "")
+                    if fix_utc_str:
+                        try:
+                            utc_dt = datetime.fromisoformat(fix_utc_str.replace("Z", "+00:00"))
+                            tr_dt = utc_dt.astimezone(TURKEY_TZ)
+                            if tr_dt.date().isoformat() == match["date"]:
+                                match_id = fix.get("id")
+                                break
+                        except Exception:
+                            if fix_utc_str.startswith(match["date"]):
+                                match_id = fix.get("id")
+                                break
 
-        fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
-        match_id = None
-        
-        for fix in fixtures:
-            fix_utc_str = fix.get("status", {}).get("utcTime", "")
-            if fix_utc_str:
-                try:
-                    utc_dt = datetime.fromisoformat(fix_utc_str.replace("Z", "+00:00"))
-                    tr_dt = utc_dt.astimezone(TURKEY_TZ)
-                    if tr_dt.date().isoformat() == match["date"]:
-                        match_id = fix.get("id")
-                        break
-                except Exception:
-                    if fix_utc_str.startswith(match["date"]):
-                        match_id = fix.get("id")
-                        break
+                if match_id:
+                    detail_url = f"https://www.fotmob.com/api/matchDetails?matchId={match_id}"
+                    m_resp = requests.get(detail_url, headers=HEADERS, timeout=10)
+                    if m_resp.status_code == 200:
+                        m_data = m_resp.json()
+                        header = m_data.get("header", {})
+                        status_info = header.get("status", {})
+                        is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
+                        
+                        score_text = None
+                        if is_finished:
+                            teams = header.get("teams", [])
+                            if len(teams) >= 2:
+                                home_team = teams[0].get("name", match["home"])
+                                home_score = teams[0].get("score", "")
+                                away_team = teams[1].get("name", match["away"])
+                                away_score = teams[1].get("score", "")
+                                if home_score != "" and away_score != "":
+                                    score_text = f"{home_team} {home_score} - {away_score} {away_team}"
 
-        if not match_id:
-            return None, False, None
+                        content = m_data.get("content", {})
+                        lineup_data = content.get("lineup", {})
+                        is_home = "fenerbahçe" in match["home"].lower()
+                        team_lineup = lineup_data.get("lineup", [])[0 if is_home else 1] if lineup_data.get("lineup") else None
 
-        detail_url = f"https://www.fotmob.com/api/matchDetails?matchId={match_id}"
-        m_resp = requests.get(detail_url, headers=HEADERS, timeout=10)
-        if m_resp.status_code != 200:
-            return None, False, None
+                        lineup_roles = None
+                        if team_lineup and team_lineup.get("players"):
+                            roles = {"GK": [], "DF": [], "MF": [], "FW": []}
+                            for row in team_lineup.get("players", []):
+                                for p in row:
+                                    name = p.get("name", {}).get("fullName") or p.get("name", {}).get("lastName", "")
+                                    role = p.get("role", "MF")
+                                    if role in roles:
+                                        roles[role].append(name)
+                                    else:
+                                        roles["MF"].append(name)
 
-        m_data = m_resp.json()
-        header = m_data.get("header", {})
-        status_info = header.get("status", {})
-        is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
-        
-        score_text = None
-        if is_finished:
-            teams = header.get("teams", [])
-            if len(teams) >= 2:
-                home_team = teams[0].get("name", match["home"])
-                home_score = teams[0].get("score", "")
-                away_team = teams[1].get("name", match["away"])
-                away_score = teams[1].get("score", "")
-                if home_score != "" and away_score != "":
-                    score_text = f"{home_team} {home_score} - {away_score} {away_team}"
+                            if sum(len(v) for v in roles.values()) == 11 and len(roles["GK"]) >= 1:
+                                lineup_roles = roles
+                                print("[+] FotMob'dan ilk 11 başarıyla alındı.", flush=True)
+                                return lineup_roles, is_finished, score_text
 
-        content = m_data.get("content", {})
-        lineup_data = content.get("lineup", {})
-        is_home = "fenerbahçe" in match["home"].lower()
-        team_lineup = lineup_data.get("lineup", [])[0 if is_home else 1] if lineup_data.get("lineup") else None
+            print("[-] FotMob'da ilk 11 henüz yayınlanmamış veya API yanıt vermedi.", flush=True)
+        except Exception as e:
+            print(f"[-] FotMob bağlantı hatası: {e}", flush=True)
 
-        lineup_roles = None
-        if team_lineup and team_lineup.get("players"):
-            roles = {"GK": [], "DF": [], "MF": [], "FW": []}
-            for row in team_lineup.get("players", []):
-                for p in row:
-                    name = p.get("name", {}).get("fullName") or p.get("name", {}).get("lastName", "")
-                    role = p.get("role", "MF")
-                    if role in roles:
-                        roles[role].append(name)
-                    else:
-                        roles["MF"].append(name)
+        if attempt < retries:
+            print("[*] 2 dakika (120 sn) sonra FotMob tekrar denenecek...", flush=True)
+            time.sleep(120)
 
-            if sum(len(v) for v in roles.values()) == 11 and len(roles["GK"]) >= 1:
-                lineup_roles = roles
-
-        return lineup_roles, is_finished, score_text
-    except Exception:
-        return None, False, None
+    return None, False, None
 
 
 def get_highlights_url(match):
@@ -707,7 +710,7 @@ def check_and_notify():
         notification_type = "STARTING_SOON"
         lineup = lineup_data
         
-        # FotMob kadroyu veremediyse yerli metin yedeğini çağır
+        # FotMob 2 denemede de kadroyu veremediyse yerli metin yedeğini çağır
         if not lineup:
             lineup = get_fallback_lineup_text(match)
 
