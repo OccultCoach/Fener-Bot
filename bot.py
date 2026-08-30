@@ -668,7 +668,7 @@ def check_and_notify():
         lineup = lineup_data
 
     # 3. Maç Günü Sabahı
-    elif is_today:
+    elif is_today and now_tr.hour >= 10:
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
 
