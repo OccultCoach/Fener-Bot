@@ -31,7 +31,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python delete_last.py
+        run: python bot.py
 
       - name: State değiştiyse GitHub'a kaydet
         run: |
