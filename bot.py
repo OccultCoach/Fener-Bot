@@ -611,6 +611,19 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
+    # --- YENİ EKLENEN: ERKEN ÇIKIŞ (EARLY EXIT) KONTROLÜ ---
+    next_match_date = state.get("next_match_date")
+    
+    # Eğer sistemde kayıtlı bir sonraki maç varsa VE bu maç bugünden ileriki bir tarihteyse:
+    if next_match_date and next_match_date > today_str:
+        # Sadece sabah 10:14 (10:00 - 10:29 arası) tetiklemesinde fikstür güncellemesi için izin ver.
+        # Günün geri kalanındaki 67 çalışmada siteleri yorma, doğrudan kapan.
+        if not (now_tr.hour == 10 and now_tr.minute < 30):
+            print(f"[*] Bugün maç yok. Sıradaki maç tarihi: {next_match_date}", flush=True)
+            print("[*] Erken Çıkış (Early Exit): Gereksiz veri çekimi engellendi, bot uykuya dönüyor.", flush=True)
+            return
+    # --------------------------------------------------------
+
     match = get_next_fenerbahce_match()
     if not match:
         print("[-] İşlenecek maç bulunamadı.", flush=True)
