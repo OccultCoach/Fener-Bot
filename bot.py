@@ -103,18 +103,19 @@ def send_telegram_message(message, reply_markup=None):
 
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return {"notified_matches": [], "next_match_date": None}
+        return {"notified_matches": [], "next_match_date": None, "last_active_match": None}
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as file:
             state = json.load(file)
         if not isinstance(state, dict):
-            return {"notified_matches": [], "next_match_date": None}
+            return {"notified_matches": [], "next_match_date": None, "last_active_match": None}
         state.setdefault("notified_matches", [])
         state.setdefault("next_match_date", None)
+        state.setdefault("last_active_match", None)
         return state
     except Exception as e:
         print(f"[-] State dosyası okunamadı: {e}", flush=True)
-        return {"notified_matches": [], "next_match_date": None}
+        return {"notified_matches": [], "next_match_date": None, "last_active_match": None}
 
 
 def save_state(state):
@@ -395,9 +396,9 @@ def get_score_from_domestic_sources(match):
         resp = requests.get(ntv_url, headers=HEADERS, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            for tag in soup.find_all(["h2", "h3", "p", "span"]):
+            for tag in soup.find_all(["h2", "h3", "p", "span", "a"]):
                 text = tag.get_text()
-                score_match = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", text)
+                score_match = re.search(r"\b(\d{1,2})\s*[-–:]\s*(\d{1,2})\b", text)
                 if score_match:
                     found = f"{home} {score_match.group(1)} - {score_match.group(2)} {away}"
                     print(f"[+] NTV Spor'dan skor alındı: {found}", flush=True)
@@ -414,7 +415,7 @@ def get_score_from_domestic_sources(match):
             soup = BeautifulSoup(resp.text, "html.parser")
             for tag in soup.find_all(["h2", "h3", "p", "a"]):
                 text = tag.get_text()
-                score_match = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", text)
+                score_match = re.search(r"\b(\d{1,2})\s*[-–:]\s*(\d{1,2})\b", text)
                 if score_match:
                     found = f"{home} {score_match.group(1)} - {score_match.group(2)} {away}"
                     print(f"[+] Fotomaç'tan skor alındı: {found}", flush=True)
@@ -422,80 +423,6 @@ def get_score_from_domestic_sources(match):
     except Exception as e:
         print(f"[-] Fotomaç arama hatası: {e}", flush=True)
 
-    # 3. SPOR EKRANI DETAY SAYFASI
-    print(f"[*] 3. Yerli Kaynak taranıyor (Spor Ekranı)...", flush=True)
-    try:
-        html = get_page(match["url"])
-        if html:
-            soup = BeautifulSoup(html, "html.parser")
-            full_text = normalize_text(soup.get_text(" ", strip=True))
-            score_match = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", full_text)
-            if score_match:
-                found = f"{home} {score_match.group(1)} - {score_match.group(2)} {away}"
-                print(f"[+] Spor Ekranı'ndan skor alındı: {found}", flush=True)
-                return found
-    except Exception as e:
-        print(f"[-] Spor Ekranı yedek hatası: {e}", flush=True)
-
-    return None
-
-
-def get_sporx_lineup(match):
-    print("[*] 2. Kaynak Taranıyor: Sporx ilk 11...", flush=True)
-    try:
-        url = "https://www.sporx.com/fenerbahce-fiksturu"
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                if "/canli/" in a["href"] or "/mac/" in a["href"]:
-                    match_page_url = absolute_url(a["href"]) if a["href"].startswith("/") else a["href"]
-                    m_resp = requests.get(match_page_url, headers=HEADERS, timeout=10)
-                    if m_resp.status_code == 200:
-                        m_soup = BeautifulSoup(m_resp.text, "html.parser")
-                        text = normalize_text(m_soup.get_text())
-                        if "ilk 11" in text.lower() and "fenerbahçe" in text.lower():
-                            for tag in m_soup.find_all(["div", "p", "ul"]):
-                                t = normalize_text(tag.get_text(" ", strip=True))
-                                if "ilk 11" in t.lower() and len(t) > 50 and len(t) < 400:
-                                    print("[+] Sporx üzerinden ilk 11 bulundu.", flush=True)
-                                    return t
-    except Exception as e:
-        print(f"[-] Sporx tarama hatası: {e}", flush=True)
-    return None
-
-
-def get_fallback_lineup_text(match):
-    sporx_result = get_sporx_lineup(match)
-    if sporx_result:
-        return sporx_result
-
-    print("[*] 3. Kaynak Taranıyor: Yerli haber bültenleri (NTV Spor & Fotomaç)...", flush=True)
-    home = match["home"]
-    away = match["away"]
-    query = requests.utils.quote(f"{home} {away} ilk 11 kadrosu")
-    garbage_keywords = ["arama sonuç", "adet içerik", "en yeniler", "tüm sonuçlar", "sayfa", "kategori", "yazar"]
-    
-    try:
-        url = f"https://www.ntvspor.net/arama?q={query}"
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for link in soup.find_all("a", href=True):
-                href = link["href"]
-                if "/futbol/" in href or "/haber/" in href:
-                    article_url = absolute_url(href) if not href.startswith("http") else href
-                    art_resp = requests.get(article_url, headers=HEADERS, timeout=10)
-                    if art_resp.status_code == 200:
-                        art_soup = BeautifulSoup(art_resp.text, "html.parser")
-                        for p in art_soup.find_all("p"):
-                            text = normalize_text(p.get_text())
-                            if "fenerbahçe" in text.lower() and any(w in text.lower() for w in ["livakovic", "irfan can", "dzeko", "tadic", "fred", "szymanski", "en-nesyri"]):
-                                if not any(g in text.lower() for g in garbage_keywords) and len(text) > 30:
-                                    print("[+] Haber detayından doğrulanmış kadro metni bulundu.", flush=True)
-                                    return text
-    except Exception as e:
-        print(f"[-] Haber arama hatası: {e}", flush=True)
     return None
 
 
@@ -535,15 +462,14 @@ def get_live_match_data(match, fetch_lineup=True):
                         is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
                         
                         score_text = None
-                        if is_finished:
-                            teams = header.get("teams", [])
-                            if len(teams) >= 2:
-                                home_team = teams[0].get("name", match["home"])
-                                home_score = teams[0].get("score", "")
-                                away_team = teams[1].get("name", match["away"])
-                                away_score = teams[1].get("score", "")
-                                if home_score != "" and away_score != "":
-                                    score_text = f"{home_team} {home_score} - {away_score} {away_team}"
+                        teams = header.get("teams", [])
+                        if len(teams) >= 2:
+                            home_team = teams[0].get("name", match["home"])
+                            home_score = teams[0].get("score", "")
+                            away_team = teams[1].get("name", match["away"])
+                            away_score = teams[1].get("score", "")
+                            if home_score != "" and away_score != "":
+                                score_text = f"{home_team} {home_score} - {away_score} {away_team}"
 
                         lineup_roles = None
                         if fetch_lineup:
@@ -677,16 +603,16 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
-    # --- ERKEN ÇIKIŞ (EARLY EXIT) KONTROLÜ ---
-    next_match_date = state.get("next_match_date")
-    
-    if next_match_date and next_match_date > today_str:
-        if not (now_tr.hour == 10 and now_tr.minute < 30):
-            print(f"[*] Bugün maç yok. Sıradaki maç tarihi: {next_match_date}", flush=True)
-            print("[*] Erken Çıkış (Early Exit): Gereksiz veri çekimi engellendi, bot uykuya dönüyor.", flush=True)
-            return
-
     match = get_next_fenerbahce_match()
+
+    # Spor Ekranı dünkü maçı sildiyse, hafızadaki son aktif maçı kontrol et (Maç Sonu Bildirimi İçin)
+    if not match and state.get("last_active_match"):
+        last_m = state["last_active_match"]
+        base_k = create_notification_key(last_m)
+        if f"ENDED|{base_k}" not in state.get("notified_matches", []):
+            print("[*] Sitede maç kalmadı fakat hafızadaki maçın bitiş bildirimi henüz atılmamış!", flush=True)
+            match = last_m
+
     if not match:
         print("[-] İşlenecek maç bulunamadı.", flush=True)
         return
@@ -701,6 +627,7 @@ def check_and_notify():
     )
 
     state["next_match_date"] = match["date"]
+    state["last_active_match"] = match
 
     base_key = create_notification_key(match)
     notified_matches = state.get("notified_matches", [])
@@ -719,19 +646,16 @@ def check_and_notify():
     lineup = None
     final_score = None
 
-    # Sadece maç önünde ilk 11 aranır (0 ile 45 dk kala)
     should_fetch_lineup = (0 <= time_diff_minutes <= 45)
-    
     lineup_data, is_match_finished, score_data = (None, False, None)
+    
     if should_fetch_lineup or time_diff_minutes <= -85:
         lineup_data, is_match_finished, score_data = get_live_match_data(match, fetch_lineup=should_fetch_lineup)
 
-    # Yerel kaynaklardan skor kontrolü
     domestic_score = None
     if time_diff_minutes <= -85:
         domestic_score = get_score_from_domestic_sources(match)
 
-    # Güvenli maç sonu barajı (-115 dk ve sonrası) veya skorun bulunmuş olması
     is_ended_candidate = (time_diff_minutes <= -115) or is_match_finished or (domestic_score is not None)
 
     # 1. Maç Sonu
@@ -751,9 +675,6 @@ def check_and_notify():
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
-        
-        if not lineup:
-            lineup = get_fallback_lineup_text(match)
 
     # 3. Maç Günü Sabahı
     elif is_today and now_tr.hour >= 10:
