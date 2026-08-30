@@ -437,7 +437,7 @@ def get_score_from_domestic_sources(match):
     except Exception as e:
         print(f"[-] Spor Ekranı yedek hatası: {e}", flush=True)
 
-    return f"{home} - {away}"
+    return None
 
 
 def get_sporx_lineup(match):
@@ -726,18 +726,25 @@ def check_and_notify():
     if should_fetch_lineup or time_diff_minutes <= -85:
         lineup_data, is_match_finished, score_data = get_live_match_data(match, fetch_lineup=should_fetch_lineup)
 
-    # Güvenli maç sonu sınırı (Uzatmalar ve penaltılar için -140 dk)
-    is_fallback_ended = (time_diff_minutes <= -140)
+    # Yerel kaynaklardan skor kontrolü
+    domestic_score = None
+    if time_diff_minutes <= -85:
+        domestic_score = get_score_from_domestic_sources(match)
+
+    # Güvenli maç sonu barajı (-115 dk ve sonrası) veya skorun bulunmuş olması
+    is_ended_candidate = (time_diff_minutes <= -115) or is_match_finished or (domestic_score is not None)
 
     # 1. Maç Sonu
-    if (time_diff_minutes <= -85 and is_match_finished) or is_fallback_ended:
+    if time_diff_minutes <= -85 and is_ended_candidate:
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         
         if score_data:
             final_score = score_data
+        elif domestic_score:
+            final_score = domestic_score
         else:
-            final_score = get_score_from_domestic_sources(match)
+            final_score = f"{match['home']} - {match['away']}"
 
     # 2. Maça Başlamak Üzere (0 - 15 dk kala)
     elif is_today and 0 <= time_diff_minutes <= 15:
