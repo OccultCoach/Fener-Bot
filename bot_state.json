@@ -1,18 +1,19 @@
 {
   "notified_matches": [
     "MATCHDAY|2026-08-30|21:30|Samsunspor|Fenerbahçe|beIN Sports 1",
-    "ENDED|2026-08-30|21:30|Samsunspor|Fenerbahçe|beIN Sports 1"
+    "ENDED|2026-08-30|21:30|Samsunspor|Fenerbahçe|beIN Sports 1",
+    "2026-09-05|20:00|Fenerbahçe|Beşiktaş|beIN Sports 1"
   ],
-  "next_match_date": "2026-08-30",
+  "next_match_date": "2026-09-05",
   "last_active_match": {
-    "home": "Samsunspor",
-    "away": "Fenerbahçe",
-    "date": "2026-08-30",
-    "time": "21:30",
+    "home": "Fenerbahçe",
+    "away": "Beşiktaş",
+    "date": "2026-09-05",
+    "time": "20:00",
     "competition": "Trendyol Süper Lig",
     "channels": [
       "beIN Sports 1"
     ],
-    "url": "https://www.sporekrani.com/home/match/483934/2026/08/30/samsunspor-fenerbahce-trendyol-super-lig-hangi-kanalda"
+    "url": "https://www.sporekrani.com/home/match/486893/2026/09/05/fenerbahce-besiktas-trendyol-super-lig-hangi-kanalda"
   }
 }
