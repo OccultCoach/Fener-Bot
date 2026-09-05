@@ -399,7 +399,6 @@ def get_score_from_domestic_sources(match):
     return None
 
 
-# 1. YEDEK KAYNAK: FENERBAHCE.ORG
 def get_fenerbahce_org_lineup(match):
     print("[*] 1. Yedek Taranıyor: Fenerbahce.org resmi haber akışı...", flush=True)
     try:
@@ -425,7 +424,6 @@ def get_fenerbahce_org_lineup(match):
     return None
 
 
-# 2. YEDEK KAYNAK: BEIN SPORTS TR
 def get_beinsports_lineup(match):
     print("[*] 2. Yedek Taranıyor: beIN Sports Canlı Maç Merkezi...", flush=True)
     home = match["home"]
@@ -454,7 +452,6 @@ def get_beinsports_lineup(match):
 
 
 def get_live_match_data(match, fetch_lineup=True):
-    # FotMob: İlk deneme + (bulunamazsa) 2 dk sonra 2. ve son deneme
     max_retries = 1 if fetch_lineup else 0
     for attempt in range(max_retries + 1):
         if fetch_lineup:
@@ -533,7 +530,6 @@ def get_live_match_data(match, fetch_lineup=True):
             print("[*] 2 dakika beklenip son deneme yapılacak...", flush=True)
             time.sleep(120)
 
-    # FotMob süreci olumsuz kapandı
     if fetch_lineup:
         print("[-] FotMob süreci tamamlandı ve kadro bulunamadı. Yedek kaynaklar çağrılıyor...", flush=True)
 
@@ -643,16 +639,9 @@ def check_and_notify():
     today_str = now_tr.date().isoformat()
     state = load_state()
 
-    # Early exit kontrolü
-    next_match_date = state.get("next_match_date")
-    if next_match_date and next_match_date > today_str:
-        if not (now_tr.hour == 10 and now_tr.minute < 30):
-            print(f"[*] Bugün maç yok. Sıradaki maç tarihi: {next_match_date}", flush=True)
-            return
-
     match = get_next_fenerbahce_match()
 
-    # Gece yarısı silinmesi koruması
+    # Gece yarısı silinmesi koruması (Maç bitti bildirimi için)
     if not match and state.get("last_active_match"):
         last_m = state["last_active_match"]
         base_k = create_notification_key(last_m)
@@ -688,6 +677,14 @@ def check_and_notify():
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
 
+    # Early exit: Maç günü değilse ve günün ilk kontrol saati (10:00 - 10:30) geçilmişse
+    # Gece yarısı gereksiz yere siteleri yormadan çıkış yap
+    if not is_today and not (now_tr.hour == 10 and now_tr.minute < 30):
+        if base_key in notified_matches or not (10 <= now_tr.hour < 22):
+            print(f"[*] Bugün maç yok ve gece saatlerindeyiz ({now_tr.strftime('%H:%M')}). Uyku modunda kalınıyor.", flush=True)
+            save_state(state)
+            return
+
     notification_type = None
     target_key = None
     lineup = None
@@ -705,7 +702,7 @@ def check_and_notify():
 
     is_ended_candidate = (time_diff_minutes <= -115) or is_match_finished or (domestic_score is not None)
 
-    # 1. Maç Sonu
+    # 1. Maç Sonu (Saat kaç olursa olsun, gece dahi olsa maç bittiğinde iletilir)
     if time_diff_minutes <= -85 and is_ended_candidate:
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
@@ -717,30 +714,32 @@ def check_and_notify():
         else:
             final_score = f"{match['home']} - {match['away']}"
 
-    # 2. Maça Başlamak Üzere (0 - 15 dk kala)
+    # 2. Maça Başlamak Üzere (0 - 15 dk kala - saat fark etmeksizin gönderilir)
     elif is_today and 0 <= time_diff_minutes <= 15:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
 
-        # FotMob 2 denemede de bulamadıysa sırayla yedekler:
         if not lineup:
-            # 1. Yedek: fenerbahce.org
             lineup = get_fenerbahce_org_lineup(match)
-            
-            # 2. Yedek: beinsports.com.tr
             if not lineup:
                 lineup = get_beinsports_lineup(match)
 
-    # 3. Maç Günü Sabahı
-    elif is_today and now_tr.hour >= 10:
+    # 3. Maç Günü Sabahı (SADECE 10:00 - 22:00 arası izin verilir)
+    elif is_today and (10 <= now_tr.hour < 22):
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
 
-    # 4. Gelecek Maç
-    else:
+    # 4. Gelecek Maç Bilgisi (SADECE 10:00 - 22:00 arası izin verilir)
+    elif not is_today and (10 <= now_tr.hour < 22):
         target_key = base_key
         notification_type = "UPCOMING"
+
+    # Gece yarısı yeni maç keşfedilse bile uyku moduna al, mesaj atma
+    else:
+        print(f"[*] Gece saatlerinde ({now_tr.strftime('%H:%M')}) yaklaşan maç bildirimi atılmaz. Uyku modunda çıkılıyor.", flush=True)
+        save_state(state)
+        return
 
     if target_key in notified_matches:
         print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}).\n[*] Yeni Telegram bildirimi gönderilmeyecek.", flush=True)
