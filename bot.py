@@ -524,85 +524,83 @@ def get_beinsports_lineup(match):
 
 def get_live_match_data(match, fetch_lineup=True):
     max_retries = 1 if fetch_lineup else 0
+    date_str = match["date"].replace("-", "")
+    
     for attempt in range(max_retries + 1):
         if fetch_lineup:
-            print(f"[*] FotMob ilk 11 taranıyor (Deneme {attempt+1}/{max_retries+1})...", flush=True)
+            print(f"[*] ESPN API ilk 11 taranıyor (Deneme {attempt+1}/{max_retries+1})...", flush=True)
         try:
-            team_url = "https://www.fotmob.com/api/teams?id=8695"
-            resp = requests.get(team_url, headers=HEADERS, timeout=10)
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={date_str}"
+            resp = requests.get(url, headers=HEADERS, timeout=10)
             if resp.status_code == 200:
-                fixtures = resp.json().get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
-                match_id = None
+                events = resp.json().get("events", [])
+                target_event = None
+                for ev in events:
+                    if "Fenerbah" in ev.get("name", ""):
+                        target_event = ev
+                        break
                 
-                for fix in fixtures:
-                    fix_utc_str = fix.get("status", {}).get("utcTime", "")
-                    if fix_utc_str:
-                        try:
-                            utc_dt = datetime.fromisoformat(fix_utc_str.replace("Z", "+00:00"))
-                            tr_dt = utc_dt.astimezone(TURKEY_TZ)
-                            if tr_dt.date().isoformat() == match["date"]:
-                                match_id = fix.get("id")
-                                break
-                        except Exception:
-                            if fix_utc_str.startswith(match["date"]):
-                                match_id = fix.get("id")
-                                break
-
-                if match_id:
-                    detail_url = f"https://www.fotmob.com/api/matchDetails?matchId={match_id}"
-                    m_resp = requests.get(detail_url, headers=HEADERS, timeout=10)
-                    if m_resp.status_code == 200:
-                        m_data = m_resp.json()
-                        header = m_data.get("header", {})
-                        status_info = header.get("status", {})
-                        is_finished = bool(status_info.get("finished", False) or status_info.get("cancelled", False))
-                        
-                        score_text = None
-                        teams = header.get("teams", [])
-                        if len(teams) >= 2:
-                            home_team = teams[0].get("name", match["home"])
-                            home_score = teams[0].get("score", "")
-                            away_team = teams[1].get("name", match["away"])
-                            away_score = teams[1].get("score", "")
-                            if home_score != "" and away_score != "":
-                                score_text = f"{home_team} {home_score} - {away_score} {away_team}"
-
-                        lineup_roles = None
-                        if fetch_lineup:
-                            content = m_data.get("content", {})
-                            lineup_data = content.get("lineup", {})
-                            is_home = "fenerbahçe" in match["home"].lower() or "fenerbahce" in match["home"].lower()
-                            team_lineup = lineup_data.get("lineup", [])[0 if is_home else 1] if lineup_data.get("lineup") else None
-
-                            if team_lineup and team_lineup.get("players"):
-                                roles = {"GK": [], "DF": [], "MF": [], "FW": []}
-                                for row in team_lineup.get("players", []):
-                                    for p in row:
-                                        name = p.get("name", {}).get("fullName") or p.get("name", {}).get("lastName", "")
-                                        role = p.get("role", "MF")
-                                        if role in roles:
+                if target_event:
+                    event_id = target_event["id"]
+                    is_finished = target_event.get("status", {}).get("type", {}).get("completed", False)
+                    score_text = None
+                    
+                    competitions = target_event.get("competitions", [])
+                    if competitions:
+                        competitors = competitions[0].get("competitors", [])
+                        if len(competitors) == 2:
+                            team1 = competitors[0]
+                            team2 = competitors[1]
+                            if is_finished or target_event.get("status", {}).get("type", {}).get("state") == "in":
+                                t1_name = team1.get("team", {}).get("displayName", "")
+                                t1_score = team1.get("score", "")
+                                t2_name = team2.get("team", {}).get("displayName", "")
+                                t2_score = team2.get("score", "")
+                                if team1.get("homeAway") == "home":
+                                    score_text = f"{t1_name} {t1_score} - {t2_score} {t2_name}"
+                                else:
+                                    score_text = f"{t2_name} {t2_score} - {t1_score} {t1_name}"
+                                
+                    lineup_roles = None
+                    if fetch_lineup:
+                        summary_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}"
+                        sum_resp = requests.get(summary_url, headers=HEADERS, timeout=10)
+                        if sum_resp.status_code == 200:
+                            rosters = sum_resp.json().get("rosters", [])
+                            for r in rosters:
+                                if "Fenerbah" in r.get("team", {}).get("displayName", ""):
+                                    players = r.get("roster", [])
+                                    roles = {"GK": [], "DF": [], "MF": [], "FW": []}
+                                    starter_count = 0
+                                    for p in players:
+                                        if p.get("starter", False):
+                                            starter_count += 1
+                                            name = p.get("athlete", {}).get("displayName", "")
+                                            pos_abbr = p.get("position", {}).get("abbreviation", "M")
+                                            role = "MF"
+                                            if pos_abbr == "G": role = "GK"
+                                            elif pos_abbr == "D": role = "DF"
+                                            elif pos_abbr == "F": role = "FW"
                                             roles[role].append(name)
-                                        else:
-                                            roles["MF"].append(name)
-
-                                if sum(len(v) for v in roles.values()) == 11 and len(roles["GK"]) >= 1:
-                                    lineup_roles = roles
-                                    print("[+] FotMob'dan ilk 11 başarıyla alındı.", flush=True)
-                                    return lineup_roles, is_finished, score_text
-
-                        return lineup_roles, is_finished, score_text
+                                            
+                                    if starter_count >= 11:
+                                        lineup_roles = roles
+                                        print("[+] ESPN API'den ilk 11 başarıyla alındı.", flush=True)
+                                        return lineup_roles, is_finished, score_text
+                                        
+                    return lineup_roles, is_finished, score_text
 
             if fetch_lineup:
-                print("[-] FotMob'da ilk 11 henüz doğrulanmadı.", flush=True)
+                print("[-] ESPN'de ilk 11 henüz doğrulanmadı.", flush=True)
         except Exception as e:
-            print(f"[-] FotMob bağlantı hatası: {e}", flush=True)
+            print(f"[-] ESPN bağlantı hatası: {e}", flush=True)
 
         if fetch_lineup and attempt < max_retries:
             print("[*] 2 dakika beklenip son deneme yapılacak...", flush=True)
             time.sleep(120)
 
     if fetch_lineup:
-        print("[-] FotMob süreci tamamlandı ve kadro bulunamadı. Yedek kaynaklar çağrılıyor...", flush=True)
+        print("[-] ESPN süreci tamamlandı ve kadro bulunamadı. Yedek kaynaklar çağrılıyor...", flush=True)
 
     return None, False, None
 
