@@ -531,7 +531,7 @@ def get_live_match_data(match, fetch_lineup=True):
             print(f"[*] ESPN API ilk 11 taranıyor (Deneme {attempt+1}/{max_retries+1})...", flush=True)
         try:
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={date_str}"
-            resp = requests.get(url, headers=HEADERS, timeout=10)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 events = resp.json().get("events", [])
                 target_event = None
@@ -564,7 +564,7 @@ def get_live_match_data(match, fetch_lineup=True):
                     lineup_roles = None
                     if fetch_lineup:
                         summary_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}"
-                        sum_resp = requests.get(summary_url, headers=HEADERS, timeout=10)
+                        sum_resp = requests.get(summary_url, timeout=10)
                         if sum_resp.status_code == 200:
                             rosters = sum_resp.json().get("rosters", [])
                             for r in rosters:
