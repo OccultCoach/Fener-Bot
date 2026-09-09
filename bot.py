@@ -38,6 +38,56 @@ CHANNEL_PRIORITY = [
 ]
 
 
+def handle_telegram_commands():
+    """Telegram'dan gelen /sil komutlarını denetler ve mesajları tüm kullanıcılardan siler."""
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        return
+
+    chat_ids = [cid.strip() for cid in CHAT_ID.split(",") if cid.strip()]
+    updates_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+
+    try:
+        res = requests.get(updates_url, timeout=10).json()
+        if not res.get("ok"):
+            return
+
+        updates = res.get("result", [])
+        if not updates:
+            return
+
+        last_update_id = updates[-1]["update_id"]
+
+        for item in updates:
+            msg = item.get("message", {})
+            text = msg.get("text", "").strip()
+            sender_id = str(msg.get("chat", {}).get("id", ""))
+            user_msg_id = msg.get("message_id")
+
+            if sender_id in chat_ids and text.startswith("/sil"):
+                print(f"[*] /sil komutu algılandı ({sender_id}). Son mesajlar geri çekiliyor...", flush=True)
+
+                # Kullanıcının gönderdiği /sil komutunu kaldır
+                requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
+                    json={"chat_id": sender_id, "message_id": user_msg_id},
+                    timeout=5,
+                )
+
+                # Tüm alıcılardan geriye dönük mesajları sil
+                for cid in chat_ids:
+                    for mid in range(user_msg_id, user_msg_id - 5, -1):
+                        del_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage"
+                        requests.post(del_url, json={"chat_id": cid, "message_id": mid}, timeout=5)
+
+                print("[+] Mesaj silme işlemi tamamlandı.", flush=True)
+
+        # İşlenen güncellemeleri temizle
+        requests.get(f"{updates_url}?offset={last_update_id + 1}", timeout=10)
+
+    except Exception as e:
+        print(f"[-] Komut kontrol hatası: {e}", flush=True)
+
+
 def normalize_text(text):
     return re.sub(r"\s+", " ", text).strip()
 
@@ -246,7 +296,6 @@ def detect_competition(url, soup):
     return "Futbol Müsabakası"
 
 
-# Sayfa gövde metni (full_text) de dahil edilerek Gençlik ve Kadın maçları elenir
 def is_football_match(url, title_text, full_text=""):
     combined = f"{url} {title_text} {full_text}".lower()
     excluded_keywords = [
@@ -295,7 +344,6 @@ def parse_match_detail(url):
     title_text = soup.title.get_text(" ", strip=True) if soup.title else ""
     full_text = normalize_text(soup.get_text(" ", strip=True))
 
-    # Gençlik / Kadın / Altyapı kontrolü sayfa metniyle birlikte yapılır
     if not is_football_match(url, title_text, full_text):
         return None
 
@@ -308,7 +356,6 @@ def parse_match_detail(url):
         return None
 
     competition = detect_competition(url, soup)
-    # Organizasyonda Gençlik Ligi saptandıysa A takım maçı değildir, reddet
     if any(k in competition.lower() for k in ["gençlik", "youth", "kadın", "u19"]):
         return None
 
@@ -566,7 +613,7 @@ def get_highlights_url(match):
     return f"https://www.youtube.com/results?search_query={encoded_query}"
 
 
-# Kanal ve saat değişikliklerinden etkilenmeyen sabit anahtar
+# Kanal veya saat değişse bile mükerrer mesajı engelleyen sabit anahtar
 def create_notification_key(match):
     return f"{match['date']}|{match['home']}|{match['away']}"
 
@@ -636,6 +683,9 @@ def check_and_notify():
     print("FENERBAHÇE BOTU ÇALIŞIYOR", flush=True)
     print("=" * 60, flush=True)
 
+    # 1. Telegram'dan /sil emri gelip gelmediğini kontrol et
+    handle_telegram_commands()
+
     now_tr = datetime.now(TURKEY_TZ)
     today_str = now_tr.date().isoformat()
     state = load_state()
@@ -678,6 +728,13 @@ def check_and_notify():
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
 
+    # Gece yarısı gereksiz kontrolü kes
+    if not is_today and not (now_tr.hour == 10 and now_tr.minute < 30):
+        if base_key in notified_matches or not (10 <= now_tr.hour < 22):
+            print(f"[*] Bugün maç yok ve gece saatlerindeyiz ({now_tr.strftime('%H:%M')}). Uyku moduna geçildi.", flush=True)
+            save_state(state)
+            return
+
     notification_type = None
     target_key = None
     lineup = None
@@ -695,7 +752,7 @@ def check_and_notify():
 
     is_ended_candidate = (time_diff_minutes <= -115) or is_match_finished or (domestic_score is not None)
 
-    # 1. Maç Sonu (Gece de olsa maç bittiğinde kesin gider)
+    # 1. Maç Sonu (Gece dahi olsa maç bittiğinde anında iletilir)
     if time_diff_minutes <= -85 and is_ended_candidate:
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
@@ -707,7 +764,7 @@ def check_and_notify():
         else:
             final_score = f"{match['home']} - {match['away']}"
 
-    # 2. Maça Başlamak Üzere (0 - 15 dk kala - saat fark etmeksizin)
+    # 2. Maça Başlamak Üzere (0 - 15 dk kala)
     elif is_today and 0 <= time_diff_minutes <= 15:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
@@ -718,17 +775,17 @@ def check_and_notify():
             if not lineup:
                 lineup = get_beinsports_lineup(match)
 
-    # 3. Maç Günü Sabahı (SADECE 10:00 - 22:00 arası)
+    # 3. Maç Günü Sabahı (Sadece 10:00 - 22:00 arası)
     elif is_today and (10 <= now_tr.hour < 22):
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
 
-    # 4. Gelecek Maç Bilgisi (SADECE 10:00 - 22:00 arası)
+    # 4. Gelecek Maç Bilgisi (Sadece 10:00 - 22:00 arası)
     elif not is_today and (10 <= now_tr.hour < 22):
         target_key = base_key
         notification_type = "UPCOMING"
 
-    # Gece saatlerinde yeni maç keşfedilirse sessiz kal
+    # Gece saatlerinde yeni maç keşfedilse bile uyku modunda kal
     else:
         print(f"[*] Gece saatlerinde ({now_tr.strftime('%H:%M')}) yaklaşan maç bildirimi atılmaz. Uyku modu.", flush=True)
         save_state(state)
