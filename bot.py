@@ -246,13 +246,15 @@ def detect_competition(url, soup):
     return "Futbol Müsabakası"
 
 
-def is_football_match(url, title_text):
-    combined = f"{url} {title_text}".lower()
+# Sayfa gövde metni (full_text) de dahil edilerek Gençlik ve Kadın maçları elenir
+def is_football_match(url, title_text, full_text=""):
+    combined = f"{url} {title_text} {full_text}".lower()
     excluded_keywords = [
         "basketbol", "euroleague", "voleybol",
         "sultanlar-ligi", "efeler-ligi", "kadinlar-basketbol",
         "kadin", "kadın", "fomget", "petrol-ofisi", "kadinlar-futbol",
-        "turkcell-kadin", "u19", "u21", "rezerv", "akademi", "ampute",
+        "turkcell-kadin", "suwen", "u19", "u21", "rezerv", "akademi", "ampute",
+        "genclik-ligi", "gençlik ligi", "youth league", "uefa youth",
     ]
     if any(keyword in combined for keyword in excluded_keywords):
         return False
@@ -293,7 +295,8 @@ def parse_match_detail(url):
     title_text = soup.title.get_text(" ", strip=True) if soup.title else ""
     full_text = normalize_text(soup.get_text(" ", strip=True))
 
-    if not is_football_match(url, title_text):
+    # Gençlik / Kadın / Altyapı kontrolü sayfa metniyle birlikte yapılır
+    if not is_football_match(url, title_text, full_text):
         return None
 
     home_team, away_team = parse_teams_from_match_page(soup)
@@ -304,6 +307,11 @@ def parse_match_detail(url):
     if "fenerbahçe" not in combined_teams:
         return None
 
+    competition = detect_competition(url, soup)
+    # Organizasyonda Gençlik Ligi saptandıysa A takım maçı değildir, reddet
+    if any(k in competition.lower() for k in ["gençlik", "youth", "kadın", "u19"]):
+        return None
+
     match_date = parse_date_from_text(full_text)
     if not match_date:
         return None
@@ -312,7 +320,6 @@ def parse_match_detail(url):
     if not match_time:
         return None
 
-    competition = detect_competition(url, soup)
     broadcast_section = extract_broadcast_section(soup)
     channels = detect_channels(broadcast_section) if broadcast_section else []
 
@@ -559,15 +566,9 @@ def get_highlights_url(match):
     return f"https://www.youtube.com/results?search_query={encoded_query}"
 
 
+# Kanal ve saat değişikliklerinden etkilenmeyen sabit anahtar
 def create_notification_key(match):
-    channels = "|".join(match["channels"])
-    return (
-        f"{match['date']}|"
-        f"{match['time']}|"
-        f"{match['home']}|"
-        f"{match['away']}|"
-        f"{channels}"
-    )
+    return f"{match['date']}|{match['home']}|{match['away']}"
 
 
 def create_message(match, notification_type="UPCOMING", lineup=None, score=None):
@@ -641,7 +642,7 @@ def check_and_notify():
 
     match = get_next_fenerbahce_match()
 
-    # Gece yarısı silinmesi koruması (Maç bitti bildirimi için)
+    # Gece yarısı silinmesi koruması
     if not match and state.get("last_active_match"):
         last_m = state["last_active_match"]
         base_k = create_notification_key(last_m)
@@ -677,14 +678,6 @@ def check_and_notify():
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
 
-    # Early exit: Maç günü değilse ve günün ilk kontrol saati (10:00 - 10:30) geçilmişse
-    # Gece yarısı gereksiz yere siteleri yormadan çıkış yap
-    if not is_today and not (now_tr.hour == 10 and now_tr.minute < 30):
-        if base_key in notified_matches or not (10 <= now_tr.hour < 22):
-            print(f"[*] Bugün maç yok ve gece saatlerindeyiz ({now_tr.strftime('%H:%M')}). Uyku modunda kalınıyor.", flush=True)
-            save_state(state)
-            return
-
     notification_type = None
     target_key = None
     lineup = None
@@ -702,7 +695,7 @@ def check_and_notify():
 
     is_ended_candidate = (time_diff_minutes <= -115) or is_match_finished or (domestic_score is not None)
 
-    # 1. Maç Sonu (Saat kaç olursa olsun, gece dahi olsa maç bittiğinde iletilir)
+    # 1. Maç Sonu (Gece de olsa maç bittiğinde kesin gider)
     if time_diff_minutes <= -85 and is_ended_candidate:
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
@@ -714,7 +707,7 @@ def check_and_notify():
         else:
             final_score = f"{match['home']} - {match['away']}"
 
-    # 2. Maça Başlamak Üzere (0 - 15 dk kala - saat fark etmeksizin gönderilir)
+    # 2. Maça Başlamak Üzere (0 - 15 dk kala - saat fark etmeksizin)
     elif is_today and 0 <= time_diff_minutes <= 15:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
@@ -725,19 +718,19 @@ def check_and_notify():
             if not lineup:
                 lineup = get_beinsports_lineup(match)
 
-    # 3. Maç Günü Sabahı (SADECE 10:00 - 22:00 arası izin verilir)
+    # 3. Maç Günü Sabahı (SADECE 10:00 - 22:00 arası)
     elif is_today and (10 <= now_tr.hour < 22):
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
 
-    # 4. Gelecek Maç Bilgisi (SADECE 10:00 - 22:00 arası izin verilir)
+    # 4. Gelecek Maç Bilgisi (SADECE 10:00 - 22:00 arası)
     elif not is_today and (10 <= now_tr.hour < 22):
         target_key = base_key
         notification_type = "UPCOMING"
 
-    # Gece yarısı yeni maç keşfedilse bile uyku moduna al, mesaj atma
+    # Gece saatlerinde yeni maç keşfedilirse sessiz kal
     else:
-        print(f"[*] Gece saatlerinde ({now_tr.strftime('%H:%M')}) yaklaşan maç bildirimi atılmaz. Uyku modunda çıkılıyor.", flush=True)
+        print(f"[*] Gece saatlerinde ({now_tr.strftime('%H:%M')}) yaklaşan maç bildirimi atılmaz. Uyku modu.", flush=True)
         save_state(state)
         return
 
