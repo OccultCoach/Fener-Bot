@@ -249,7 +249,6 @@ def parse_date_from_text(text, url=""):
             except ValueError:
                 pass
 
-    # URL'den tarih çekme yedeği: /2026/09/10/
     url_date = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", url)
     if url_date:
         try:
@@ -300,8 +299,9 @@ def detect_competition(url, soup):
     return "Futbol Müsabakası"
 
 
-def is_football_match(url, title_text, full_text=""):
-    combined = f"{url} {title_text} {full_text}".lower()
+# YALNIZCA başlık ve URL taranır (Footer/sidebar'daki menü kelimeleri yüzünden A takım elenmez)
+def is_football_match(url, title_text):
+    combined = f"{url} {title_text}".lower()
     excluded_keywords = [
         "basketbol", "euroleague", "voleybol",
         "sultanlar-ligi", "efeler-ligi", "kadinlar-basketbol",
@@ -336,12 +336,10 @@ def parse_teams_from_match_page(soup, url=""):
             if 1 <= len(home) <= 60 and 1 <= len(away) <= 60 and "spor ekranı" not in home.lower():
                 return home, away
 
-    # URL üzerinden takımları alma (Yedek)
     url_slug_match = re.search(r"/(\d{4}/\d{2}/\d{2})/([a-z0-9\-]+)-hangi-kanalda", url)
     if url_slug_match:
         slug = url_slug_match.group(2).lower()
         if "fenerbahce" in slug:
-            # Örnek: fenerbahce-roma-uefa-sampiyonlar-ligi
             tokens = slug.split("-")
             if "fenerbahce" in tokens:
                 idx = tokens.index("fenerbahce")
@@ -362,7 +360,7 @@ def parse_match_detail(url):
     title_text = soup.title.get_text(" ", strip=True) if soup.title else ""
     full_text = normalize_text(soup.get_text(" ", strip=True))
 
-    if not is_football_match(url, title_text, full_text):
+    if not is_football_match(url, title_text):
         return None
 
     home_team, away_team = parse_teams_from_match_page(soup, url)
@@ -374,7 +372,8 @@ def parse_match_detail(url):
         return None
 
     competition = detect_competition(url, soup)
-    if any(k in competition.lower() for k in ["gençlik", "youth", "kadın", "u19"]):
+    # Sadece organizasyon alanında gençlik veya kadın ligi varsa reddet
+    if any(k in competition.lower() for k in ["gençlik", "youth", "kadın", "u19", "suwen"]):
         return None
 
     match_date = parse_date_from_text(full_text, url)
@@ -383,7 +382,7 @@ def parse_match_detail(url):
 
     match_time = parse_time_from_text(full_text)
     if not match_time:
-        match_time = "19:45" # Varsayılan fallback
+        match_time = "19:45"
 
     broadcast_section = extract_broadcast_section(soup)
     channels = detect_channels(broadcast_section) if broadcast_section else []
