@@ -39,7 +39,6 @@ CHANNEL_PRIORITY = [
 
 
 def handle_telegram_commands():
-    """Telegram'dan gelen /sil komutunu denetler ve mesajları tüm kullanıcılardan siler."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
 
@@ -64,7 +63,7 @@ def handle_telegram_commands():
             user_msg_id = msg.get("message_id")
 
             if sender_id in chat_ids and text.startswith("/sil"):
-                print(f"[*] /sil komutu algılandı ({sender_id}). Son mesajlar geri çekiliyor...", flush=True)
+                print(f"[*] /sil komutu algılandı ({sender_id}). Son mesajlar temizleniyor...", flush=True)
 
                 requests.post(
                     f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
@@ -237,20 +236,28 @@ TURKISH_MONTHS = {
 }
 
 
-def parse_date_from_text(text):
+def parse_date_from_text(text, url=""):
     pattern = r"\b(\d{1,2})\s+([A-Za-zÇĞİÖŞÜçğıöşü]+)\s+(\d{4})\b"
     match = re.search(pattern, text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    day = int(match.group(1))
-    month = TURKISH_MONTHS.get(match.group(2).lower())
-    year = int(match.group(3))
-    if not month:
-        return None
-    try:
-        return date(year, month, day)
-    except ValueError:
-        return None
+    if match:
+        day = int(match.group(1))
+        month = TURKISH_MONTHS.get(match.group(2).lower())
+        year = int(match.group(3))
+        if month:
+            try:
+                return date(year, month, day)
+            except ValueError:
+                pass
+
+    # URL'den tarih çekme yedeği: /2026/09/10/
+    url_date = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", url)
+    if url_date:
+        try:
+            return date(int(url_date.group(1)), int(url_date.group(2)), int(url_date.group(3)))
+        except ValueError:
+            pass
+
+    return None
 
 
 def parse_time_from_text(text):
@@ -279,6 +286,7 @@ def detect_competition(url, soup):
         "UEFA Avrupa Ligi Play-Off",
         "UEFA Avrupa Ligi",
         "UEFA Konferans Ligi",
+        "UEFA Avrupa Konferans Ligi",
         "Trendyol Süper Lig",
         "Süper Lig",
         "Ziraat Türkiye Kupası",
@@ -328,18 +336,19 @@ def parse_teams_from_match_page(soup, url=""):
             if 1 <= len(home) <= 60 and 1 <= len(away) <= 60 and "spor ekranı" not in home.lower():
                 return home, away
 
-    # URL üzerinden yedek takım tespiti
-    url_match = re.search(r"/(\d{4}/\d{2}/\d{2})/([a-z0-9\-]+)-hangi-kanalda", url)
-    if url_match:
-        slug = url_match.group(2)
+    # URL üzerinden takımları alma (Yedek)
+    url_slug_match = re.search(r"/(\d{4}/\d{2}/\d{2})/([a-z0-9\-]+)-hangi-kanalda", url)
+    if url_slug_match:
+        slug = url_slug_match.group(2).lower()
         if "fenerbahce" in slug:
-            parts = slug.split("-")
-            if "fenerbahce" in parts:
-                fb_idx = parts.index("fenerbahce")
-                if fb_idx == 0 and len(parts) > 1:
-                    return "Fenerbahçe", parts[1].capitalize()
-                elif fb_idx > 0:
-                    return parts[0].capitalize(), "Fenerbahçe"
+            # Örnek: fenerbahce-roma-uefa-sampiyonlar-ligi
+            tokens = slug.split("-")
+            if "fenerbahce" in tokens:
+                idx = tokens.index("fenerbahce")
+                if idx == 0 and len(tokens) > 1:
+                    return "Fenerbahçe", tokens[1].capitalize()
+                elif idx > 0:
+                    return tokens[0].capitalize(), "Fenerbahçe"
 
     return None, None
 
@@ -368,13 +377,13 @@ def parse_match_detail(url):
     if any(k in competition.lower() for k in ["gençlik", "youth", "kadın", "u19"]):
         return None
 
-    match_date = parse_date_from_text(full_text)
+    match_date = parse_date_from_text(full_text, url)
     if not match_date:
         return None
 
     match_time = parse_time_from_text(full_text)
     if not match_time:
-        return None
+        match_time = "19:45" # Varsayılan fallback
 
     broadcast_section = extract_broadcast_section(soup)
     channels = detect_channels(broadcast_section) if broadcast_section else []
@@ -699,8 +708,6 @@ def check_and_notify():
 
     match = get_next_fenerbahce_match()
 
-    # KRİTİK DÜZELTME: Hafızadaki maça sığınma kuralı SADECE maç saati geçmişse çalışır!
-    # Gelecek maçlar için asla eski hafızaya bakılmaz.
     if not match and state.get("last_active_match"):
         last_m = state["last_active_match"]
         try:
@@ -712,7 +719,7 @@ def check_and_notify():
         if is_past:
             base_k = create_notification_key(last_m)
             if f"ENDED|{base_k}" not in state.get("notified_matches", []):
-                print("[*] Sitede maç kalmadı fakat hafızadaki geçmiş maçın bitiş bildirimi henüz atılmamış!", flush=True)
+                print("[*] Sitede maç kalmadı fakat hafızadaki maçın bitiş bildirimi henüz atılmamış!", flush=True)
                 match = last_m
 
     if not match:
@@ -743,16 +750,14 @@ def check_and_notify():
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
 
-    # 1. Bildirim daha önce atıldıysa erken çıkış yap (Spam Koruması)
     if not is_today and base_key in notified_matches:
         print(f"[*] Bu yaklaşan maç bildirimi daha önce iletilmiş ({base_key}). Tekrar atılmayacak.", flush=True)
         save_state(state)
         return
 
-    # Gece yarısı sessizlik filtresi
     if not is_today and not (now_tr.hour == 10 and now_tr.minute < 30):
         if not (10 <= now_tr.hour < 22):
-            print(f"[*] Gece saatlerindeyiz ({now_tr.strftime('%H:%M')}). Yaklaşan maç bildirimi gündüze ertelendi.", flush=True)
+            print(f"[*] Gece saatlerindeyiz ({now_tr.strftime('%H:%M')}). Uyku modunda kalınıyor.", flush=True)
             save_state(state)
             return
 
@@ -807,12 +812,12 @@ def check_and_notify():
         notification_type = "UPCOMING"
 
     else:
-        print(f"[*] Bildirim saati aralığı dışında kalındı. Uyku modu.", flush=True)
+        print(f"[*] Bildirim penceresi dışındayız. Uyku moduna geçildi.", flush=True)
         save_state(state)
         return
 
     if target_key in notified_matches:
-        print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}).\n[*] Yeni Telegram bildirimi gönderilmeyecek.", flush=True)
+        print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}). Yeni bildirim atılmayacak.", flush=True)
         save_state(state)
         return
 
