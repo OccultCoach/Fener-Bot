@@ -480,14 +480,14 @@ def get_fenerbahce_org_lineup(match):
             for a in soup.find_all("a", href=True):
                 title = a.get_text(" ", strip=True).lower()
                 href = a["href"]
-                if "ilk 11" in title or "11'i" in title or "kadromuz" in title:
+                if any(k in title for k in ["ilk 11", "11'i", "kadromuz", "kadro", "kamp kadro", "maç kadro"]):
                     full_article_url = "https://www.fenerbahce.org" + href if href.startswith("/") else href
                     art_resp = requests.get(full_article_url, headers=HEADERS, timeout=10)
                     if art_resp.status_code == 200:
                         art_soup = BeautifulSoup(art_resp.text, "html.parser")
                         for p in art_soup.find_all(["p", "div", "ul"]):
                             text = normalize_text(p.get_text(" ", strip=True))
-                            if 30 < len(text) < 400 and ("fenerbahçe" in text.lower() or "livakovic" in text.lower() or "dzeko" in text.lower()):
+                            if 30 < len(text) < 450 and (text.count(",") >= 5 or text.count("-") >= 5 or "Fenerbahçe:" in text):
                                 print("[+] Fenerbahce.org üzerinden ilk 11 bulundu.", flush=True)
                                 return text
     except Exception as e:
@@ -571,7 +571,7 @@ def get_live_match_data(match, fetch_lineup=True):
                         if fetch_lineup:
                             content = m_data.get("content", {})
                             lineup_data = content.get("lineup", {})
-                            is_home = "fenerbahçe" in match["home"].lower()
+                            is_home = "fenerbahçe" in match["home"].lower() or "fenerbahce" in match["home"].lower()
                             team_lineup = lineup_data.get("lineup", [])[0 if is_home else 1] if lineup_data.get("lineup") else None
 
                             if team_lineup and team_lineup.get("players"):
@@ -627,7 +627,7 @@ def get_highlights_url(match):
         search_query = f"{home} {away} {season_str} maç özeti TRT Spor Tabii Spor"
         
     encoded_query = requests.utils.quote(search_query)
-    return f"https://www.youtube.com/results?search_query={encoded_query}"
+    return f"https://www.youtube.com/results?search_query={encoded_query}&sp=EgIIAg%253D%253D"
 
 
 def create_notification_key(match):
