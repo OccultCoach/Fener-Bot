@@ -6,9 +6,6 @@
     "MATCHDAY|2026-09-05|20:00|Fenerbahçe|Beşiktaş|beIN Sports 1",
     "SOON|2026-09-05|20:00|Fenerbahçe|Beşiktaş|beIN Sports 1",
     "ENDED|2026-09-05|20:00|Fenerbahçe|Beşiktaş|beIN Sports 1",
-    "2026-09-10|19:45|Fenerbahçe|Roma|TRT 1",
-    "2026-09-10|19:45|Fenerbahçe|Roma|TRT 1|CBC Sport",
-    "2026-09-10|14:00|Fenerbahçe|Roma|",
     "2026-09-10|Fenerbahçe|Roma"
   ],
   "next_match_date": "2026-09-10",
@@ -16,9 +13,12 @@
     "home": "Fenerbahçe",
     "away": "Roma",
     "date": "2026-09-10",
-    "time": "14:00",
-    "competition": "Futbol Müsabakası",
-    "channels": [],
-    "url": "https://www.sporekrani.com/home/match/488013/2026/09/10/fenerbahce-roma-uefa-genclik-ligi-hangi-kanalda"
+    "time": "19:45",
+    "competition": "UEFA Şampiyonlar Ligi",
+    "channels": [
+      "TRT 1",
+      "CBC Sport"
+    ],
+    "url": "https://www.sporekrani.com/home/match/487254/2026/09/10/fenerbahce-roma-uefa-sampiyonlar-ligi-hangi-kanalda"
   }
 }
