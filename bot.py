@@ -13,7 +13,8 @@ TURKEY_TZ = timezone(timedelta(hours=3))
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-
+GIST_ID = os.environ.get("GIST_ID")
+GIST_TOKEN = os.environ.get("GIST_TOKEN")
 BASE_URL = "https://www.sporekrani.com"
 TEAM_URL = f"{BASE_URL}/home/team/fenerbahce/"
 STATE_FILE = "bot_state.json"
@@ -144,29 +145,68 @@ def send_telegram_message(message, reply_markup=None):
 
 
 def load_state():
-    if not os.path.exists(STATE_FILE):
-        return {"notified_matches": [], "next_match_date": None, "last_active_match": None}
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as file:
-            state = json.load(file)
-        if not isinstance(state, dict):
-            return {"notified_matches": [], "next_match_date": None, "last_active_match": None}
-        state.setdefault("notified_matches", [])
-        state.setdefault("next_match_date", None)
-        state.setdefault("last_active_match", None)
-        return state
-    except Exception as e:
-        print(f"[-] State dosyası okunamadı: {e}", flush=True)
-        return {"notified_matches": [], "next_match_date": None, "last_active_match": None}
+    default_state = {"notified_matches": [], "next_match_date": None, "last_active_match": None}
+    if not GIST_ID or not GIST_TOKEN:
+        if not os.path.exists(STATE_FILE):
+            return default_state
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as file:
+                state = json.load(file)
+            if not isinstance(state, dict):
+                return default_state
+            state.setdefault("notified_matches", [])
+            state.setdefault("next_match_date", None)
+            state.setdefault("last_active_match", None)
+            return state
+        except Exception as e:
+            print(f"[-] Lokal state okuma hatası: {e}", flush=True)
+            return default_state
+    else:
+        try:
+            headers = {"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+            url = f"https://api.github.com/gists/{GIST_ID}"
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                files = resp.json().get("files", {})
+                if STATE_FILE in files:
+                    content = files[STATE_FILE].get("content", "{}")
+                    state = json.loads(content)
+                    state.setdefault("notified_matches", [])
+                    state.setdefault("next_match_date", None)
+                    state.setdefault("last_active_match", None)
+                    return state
+        except Exception as e:
+            print(f"[-] Gist okuma hatası: {e}", flush=True)
+        return default_state
 
 
 def save_state(state):
+    if not GIST_ID or not GIST_TOKEN:
+        try:
+            with open(STATE_FILE, "w", encoding="utf-8") as file:
+                json.dump(state, file, ensure_ascii=False, indent=2)
+            print("[+] Lokal state dosyası güncellendi.", flush=True)
+        except Exception as e:
+            print(f"[-] Lokal state kaydedilemedi: {e}", flush=True)
+        return
+
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as file:
-            json.dump(state, file, ensure_ascii=False, indent=2)
-        print("[+] State dosyası güncellendi.", flush=True)
+        headers = {"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+        url = f"https://api.github.com/gists/{GIST_ID}"
+        payload = {
+            "files": {
+                STATE_FILE: {
+                    "content": json.dumps(state, ensure_ascii=False, indent=2)
+                }
+            }
+        }
+        resp = requests.patch(url, headers=headers, json=payload, timeout=10)
+        if resp.status_code == 200:
+            print("[+] State Gist üzerine başarıyla kaydedildi.", flush=True)
+        else:
+            print(f"[-] Gist güncelleme hatası: {resp.text}", flush=True)
     except Exception as e:
-        print(f"[-] State dosyası kaydedilemedi: {e}", flush=True)
+        print(f"[-] Gist API hatası: {e}", flush=True)
 
 
 def canonical_channel_name(channel):
