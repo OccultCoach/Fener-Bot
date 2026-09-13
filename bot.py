@@ -13,8 +13,8 @@ TURKEY_TZ = timezone(timedelta(hours=3))
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-GIST_ID = os.environ.get("GIST_ID")
-GIST_TOKEN = os.environ.get("GIST_TOKEN")
+GIST_ID = os.environ.get("GIST_ID", "").strip() if os.environ.get("GIST_ID") else None
+GIST_TOKEN = os.environ.get("GIST_TOKEN", "").strip() if os.environ.get("GIST_TOKEN") else None
 BASE_URL = "https://www.sporekrani.com"
 TEAM_URL = f"{BASE_URL}/home/team/fenerbahce/"
 STATE_FILE = "bot_state.json"
@@ -712,6 +712,16 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"🟡🔵 Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız."
         )
 
+    if notification_type == "DAY_BEFORE":
+        return (
+            f"⏳ 🟡 <b>YARIN MAÇIMIZ VAR!</b> 🔵\n\n"
+            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"🏆 <i>{match['competition']}</i>\n"
+            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"💛💙 <i>Büyük güne son 1 gün! Hazırlıklar başlasın!</i>"
+        )
+
     if notification_type == "MATCHDAY":
         return (
             f"📣 🟡 <b>BUGÜN FENERBAHÇEMİZİN MAÇI VAR!</b> 🔵\n\n"
@@ -787,10 +797,7 @@ def check_and_notify():
     print(f"[*] Şu anki Türkiye Saati: {now_tr.strftime('%Y-%m-%d %H:%M')}", flush=True)
     print(f"[*] Maça kalan süre: {time_diff_minutes:.1f} dakika", flush=True)
 
-    if not is_today and base_key in notified_matches:
-        print(f"[*] Bu yaklaşan maç bildirimi daha önce iletilmiş ({base_key}). Tekrar atılmayacak.", flush=True)
-        save_state(state)
-        return
+    is_tomorrow = (match_dt.date() - now_tr.date()).days == 1
 
     if not is_today and not (now_tr.hour == 10 and now_tr.minute < 30):
         if not (10 <= now_tr.hour < 22):
@@ -843,8 +850,13 @@ def check_and_notify():
         target_key = f"MATCHDAY|{base_key}"
         notification_type = "MATCHDAY"
 
-    # 4. Gelecek Maç Bilgisi (10:00 - 22:00)
-    elif not is_today and (10 <= now_tr.hour < 22):
+    # 4. Yarınki Maç (10:00 - 22:00)
+    elif is_tomorrow and (10 <= now_tr.hour < 22):
+        target_key = f"DAY_BEFORE|{base_key}"
+        notification_type = "DAY_BEFORE"
+
+    # 5. Gelecek Maç Bilgisi (10:00 - 22:00)
+    elif not is_today and not is_tomorrow and (10 <= now_tr.hour < 22):
         target_key = base_key
         notification_type = "UPCOMING"
 
@@ -865,7 +877,7 @@ def check_and_notify():
     if notification_type == "MATCH_ENDED":
         highlights_url = get_highlights_url(match)
         keyboard_buttons.append([{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}])
-    elif notification_type in ("STARTING_SOON", "UPCOMING"):
+    elif notification_type in ("STARTING_SOON", "UPCOMING", "DAY_BEFORE"):
         keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
