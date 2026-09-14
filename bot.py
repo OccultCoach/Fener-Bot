@@ -616,11 +616,17 @@ def get_live_match_data(match, fetch_lineup=True):
                                         if p.get("starter", False):
                                             starter_count += 1
                                             name = p.get("athlete", {}).get("displayName", "")
-                                            pos_abbr = p.get("position", {}).get("abbreviation", "M")
+                                            pos_abbr = p.get("position", {}).get("abbreviation", "M").upper()
                                             role = "MF"
-                                            if pos_abbr == "G": role = "GK"
-                                            elif pos_abbr == "D": role = "DF"
-                                            elif pos_abbr == "F": role = "FW"
+                                            if "G" in pos_abbr:
+                                                role = "GK"
+                                            elif "D" in pos_abbr or "B" in pos_abbr:
+                                                if "M" in pos_abbr: role = "MF"
+                                                else: role = "DF"
+                                            elif "M" in pos_abbr:
+                                                role = "MF"
+                                            elif "F" in pos_abbr or "S" in pos_abbr or "W" in pos_abbr:
+                                                role = "FW"
                                             roles[role].append(name)
                                             
                                     if starter_count >= 11:
