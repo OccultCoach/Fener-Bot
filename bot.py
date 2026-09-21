@@ -113,7 +113,7 @@ def get_page(url):
 def send_telegram_message(message, reply_markup=None):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("[-] TELEGRAM_TOKEN veya CHAT_ID eksik.", flush=True)
-        return False
+        return False, {}
 
     chat_ids = [cid.strip() for cid in CHAT_ID.split(",") if cid.strip()]
     print(f"[*] Toplam {len(chat_ids)} kişiye bildirim gönderilecek...", flush=True)
@@ -341,6 +341,10 @@ def detect_competition(url, soup):
         pattern = r"(?i)\b" + re.escape(competition) + r"\b"
         if re.search(pattern, target_text):
             return competition
+            
+    if "dostluk" in target_text or "hazırlık" in target_text or "hazirlik" in target_text:
+        return "Hazırlık / Dostluk Maçı"
+        
     return "Futbol Müsabakası"
 
 
