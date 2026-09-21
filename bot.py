@@ -334,6 +334,8 @@ def detect_competition(url, soup):
         "Ziraat Türkiye Kupası",
         "Türkiye Kupası",
         "Süper Kupa",
+        "Hazırlık Maçı",
+        "Dostluk Maçı",
     ]
     for competition in competitions:
         pattern = r"(?i)\b" + re.escape(competition) + r"\b"
@@ -689,10 +691,11 @@ def create_notification_key(match):
     return f"{match['date']}|{match['home']}|{match['away']}"
 
 
-def create_message(match, notification_type="UPCOMING", lineup=None, score=None):
+def create_message(match, notification_type="UPCOMING", lineup=None, score=None, channel_changed=False):
     match_date = date.fromisoformat(match["date"])
     channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
 
+    msg = ""
     if notification_type == "STARTING_SOON":
         lineup_block = ""
         if isinstance(lineup, dict):
@@ -710,7 +713,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
         elif isinstance(lineup, str) and len(lineup.strip()) > 0:
             lineup_block = f"📋 <b>İLK 11 BİLGİSİ:</b>\n<i>{lineup}</i>\n\n"
 
-        return (
+        msg = (
             f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
             f"{lineup_block}"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
@@ -720,17 +723,17 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"💛💙 <i>Haydi Fenerbahçeli! Ekran başına geçme zamanı.</i>"
         )
 
-    if notification_type == "MATCH_ENDED":
+    elif notification_type == "MATCH_ENDED":
         match_title = score if score else f"{match['home']} - {match['away']}"
-        return (
+        msg = (
             f"🏁 💛 <b>MAÇ SONA ERDİ!</b> 💙 🎉\n\n"
             f"⚽️ <b>{match_title}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n\n"
             f"🟡🔵 Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız."
         )
 
-    if notification_type == "DAY_BEFORE":
-        return (
+    elif notification_type == "DAY_BEFORE":
+        msg = (
             f"⏳ 🟡 <b>YARIN MAÇIMIZ VAR!</b> 🔵\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
@@ -739,8 +742,8 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"💛💙 <i>Büyük güne son 1 gün! Hazırlıklar başlasın!</i>"
         )
 
-    if notification_type == "MATCHDAY":
-        return (
+    elif notification_type == "MATCHDAY":
+        msg = (
             f"📣 🟡 <b>BUGÜN FENERBAHÇEMİZİN MAÇI VAR!</b> 🔵\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
@@ -749,14 +752,20 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None)
             f"📺 <b>Kanal:</b> {channel_text}"
         )
 
-    return (
-        f"📅 🟡 <b>FENERBAHÇEMİZİN YAKLAŞAN MAÇI</b> 🔵\n\n"
-        f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
-        f"🏆 <i>{match['competition']}</i>\n"
-        f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
-        f"⏰ <b>Saat:</b> {match['time']}\n"
-        f"📺 <b>Kanal:</b> {channel_text}"
-    )
+    else:
+        msg = (
+            f"📅 🟡 <b>FENERBAHÇEMİZİN YAKLAŞAN MAÇI</b> 🔵\n\n"
+            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"🏆 <i>{match['competition']}</i>\n"
+            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
+            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"📺 <b>Kanal:</b> {channel_text}"
+        )
+        
+    if channel_changed:
+        msg += "\n\n📢 <i>Not: Maçın yayınlanacağı kanal güncellenmiştir!</i>"
+        
+    return msg
 
 
 def check_and_notify():
@@ -887,6 +896,12 @@ def check_and_notify():
         save_state(state)
         return
 
+    channel_changed = False
+    last_notified = state.get("last_notified_match")
+    if last_notified and create_notification_key(last_notified) == base_key:
+        if set(last_notified.get("channels", [])) != set(match.get("channels", [])):
+            channel_changed = True
+
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
 
@@ -899,7 +914,7 @@ def check_and_notify():
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
 
-    message = create_message(match, notification_type=notification_type, lineup=lineup, score=final_score)
+    message = create_message(match, notification_type=notification_type, lineup=lineup, score=final_score, channel_changed=channel_changed)
     success, sent_msgs = send_telegram_message(message, reply_markup=reply_markup)
 
     if not success:
@@ -908,6 +923,7 @@ def check_and_notify():
 
     if sent_msgs:
         state["last_sent_messages"] = sent_msgs
+        state["last_notified_match"] = match
 
     notified_matches.append(target_key)
     state["notified_matches"] = notified_matches[-100:]
