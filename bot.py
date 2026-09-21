@@ -72,10 +72,11 @@ def handle_telegram_commands():
                     timeout=5,
                 )
 
-                for cid in chat_ids:
-                    for mid in range(user_msg_id, user_msg_id - 6, -1):
-                        del_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage"
-                        requests.post(del_url, json={"chat_id": cid, "message_id": mid}, timeout=5)
+                state = load_state()
+                last_sent = state.get("last_sent_messages", {})
+                for cid, mid in last_sent.items():
+                    del_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage"
+                    requests.post(del_url, json={"chat_id": cid, "message_id": mid}, timeout=5)
 
                 print("[+] Mesaj silme işlemi tamamlandı.", flush=True)
 
@@ -119,6 +120,7 @@ def send_telegram_message(message, reply_markup=None):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     success_count = 0
+    sent_messages = {}
 
     for cid in chat_ids:
         payload = {
@@ -136,12 +138,13 @@ def send_telegram_message(message, reply_markup=None):
             if response.status_code == 200 and data.get("ok"):
                 print(f"[+] Telegram bildirimi gönderildi: {cid}", flush=True)
                 success_count += 1
+                sent_messages[cid] = data["result"]["message_id"]
             else:
                 print(f"[-] Telegram API hatası ({cid}): {data}", flush=True)
         except requests.RequestException as e:
             print(f"[-] Telegram ağ hatası ({cid}): {e}", flush=True)
 
-    return success_count > 0
+    return success_count > 0, sent_messages
 
 
 def load_state():
@@ -348,9 +351,17 @@ def is_football_match(url, title_text):
         "kadin", "kadın", "fomget", "petrol-ofisi", "kadinlar-futbol",
         "turkcell-kadin", "suwen", "u19", "u21", "rezerv", "akademi", "ampute",
         "genclik-ligi", "gençlik ligi", "youth league", "uefa youth",
+        "tbf", "tvf"
     ]
     if any(keyword in combined for keyword in excluded_keywords):
         return False
+        
+    sponsors = ["beko", "opet", "tarfin", "medicana", "parolapara", "koleji"]
+    title_lower = title_text.lower()
+    for sp in sponsors:
+        if f"fenerbahçe {sp}" in title_lower or f"fenerbahce {sp}" in title_lower or f"fenerbahçe-{sp}" in title_lower or f"fenerbahce-{sp}" in title_lower:
+            return False
+            
     return True
 
 
@@ -889,11 +900,14 @@ def check_and_notify():
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
 
     message = create_message(match, notification_type=notification_type, lineup=lineup, score=final_score)
-    success = send_telegram_message(message, reply_markup=reply_markup)
+    success, sent_msgs = send_telegram_message(message, reply_markup=reply_markup)
 
     if not success:
         print("[-] Telegram gönderimi başarısız.", flush=True)
         return
+
+    if sent_msgs:
+        state["last_sent_messages"] = sent_msgs
 
     notified_matches.append(target_key)
     state["notified_matches"] = notified_matches[-100:]
