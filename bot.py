@@ -471,6 +471,11 @@ def get_match_links():
         if "/home/match/" not in href:
             continue
         href = absolute_url(href)
+        
+        # (MADDE 1 ONAYLI OPTİMİZASYON) Sadece URL'ye bakarak basketbol/voleybol/genç takımları HTTP isteği atmadan kapıda reddet!
+        if not is_football_match(href, href):
+            continue
+            
         if href not in links:
             links.append(href)
     return links
@@ -504,6 +509,10 @@ def get_next_fenerbahce_match():
             upcoming.append(match)
         elif (today - match_date).days == 1 and now_tr.hour < 10:
             upcoming.append(match)
+            
+        # (MADDE 1 ONAYLI OPTİMİZASYON) Aradığımız sıradaki 2 A Takım maçını bulduktan sonra diğer aylardaki maçları boş yere indirme (Fren):
+        if len(upcoming) >= 2:
+            break
 
     if not upcoming:
         return None
