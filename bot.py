@@ -350,16 +350,20 @@ def detect_competition(url, soup):
 
 # YALNIZCA başlık ve URL taranır (Footer/sidebar'daki menü kelimeleri yüzünden A takım elenmez)
 def is_football_match(url, title_text):
+    import re
     combined = f"{url} {title_text}".lower()
     excluded_keywords = [
         "basketbol", "euroleague", "voleybol",
         "sultanlar-ligi", "efeler-ligi", "kadinlar-basketbol",
         "kadin", "kadın", "fomget", "petrol-ofisi", "kadinlar-futbol",
-        "turkcell-kadin", "suwen", "u19", "u21", "rezerv", "akademi", "ampute",
+        "turkcell-kadin", "suwen", "u14", "u15", "u16", "u17", "u18", "u19", "u21", 
+        "elit", "gelişim", "gelisim", "rezerv", "akademi", "ampute",
         "genclik-ligi", "gençlik ligi", "youth league", "uefa youth",
         "tbf", "tvf"
     ]
     if any(keyword in combined for keyword in excluded_keywords):
+        return False
+    if re.search(r'\bu\d{2}\b', combined):
         return False
         
     sponsors = ["beko", "opet", "tarfin", "medicana", "parolapara", "koleji"]
