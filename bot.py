@@ -695,7 +695,7 @@ def create_notification_key(match):
     return f"{match['date']}|{match['home']}|{match['away']}"
 
 
-def create_message(match, notification_type="UPCOMING", lineup=None, score=None, channel_changed=False):
+def create_message(match, notification_type="UPCOMING", lineup=None, score=None, channel_changed=False, time_changed=False):
     match_date = date.fromisoformat(match["date"])
     channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
 
@@ -722,6 +722,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             f"{lineup_block}"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
+            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
             f"⏰ <b>Saat:</b> {match['time']}\n"
             f"📺 <b>Kanal:</b> {channel_text}\n\n"
             f"💛💙 <i>Haydi Fenerbahçeli! Ekran başına geçme zamanı.</i>"
@@ -732,7 +733,8 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
         msg = (
             f"🏁 💛 <b>MAÇ SONA ERDİ!</b> 💙 🎉\n\n"
             f"⚽️ <b>{match_title}</b>\n"
-            f"🏆 <i>{match['competition']}</i>\n\n"
+            f"🏆 <i>{match['competition']}</i>\n"
+            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n\n"
             f"🟡🔵 Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız."
         )
 
@@ -741,6 +743,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             f"⏳ 🟡 <b>YARIN MAÇIMIZ VAR!</b> 🔵\n\n"
             f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
+            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
             f"⏰ <b>Saat:</b> {match['time']}\n"
             f"📺 <b>Kanal:</b> {channel_text}\n\n"
             f"💛💙 <i>Büyük güne son 1 gün! Hazırlıklar başlasın!</i>"
@@ -753,7 +756,8 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             f"🏆 <i>{match['competition']}</i>\n"
             f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
             f"⏰ <b>Saat:</b> {match['time']}\n"
-            f"📺 <b>Kanal:</b> {channel_text}"
+            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"💛💙 <i>Ve sonunda büyük gün geldi! Başarılar Fenerbahçem!</i>"
         )
 
     else:
@@ -766,8 +770,12 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             f"📺 <b>Kanal:</b> {channel_text}"
         )
         
-    if channel_changed:
+    if channel_changed and time_changed:
+        msg += "\n\n📢 <i>Not: Maçın saati ve yayınlanacağı kanal güncellenmiştir!</i>"
+    elif channel_changed:
         msg += "\n\n📢 <i>Not: Maçın yayınlanacağı kanal güncellenmiştir!</i>"
+    elif time_changed:
+        msg += "\n\n📢 <i>Not: Maçın saati güncellenmiştir!</i>"
         
     return msg
 
@@ -840,7 +848,7 @@ def check_and_notify():
     lineup = None
     final_score = None
 
-    should_fetch_lineup = (0 <= time_diff_minutes <= 45)
+    should_fetch_lineup = (0 <= time_diff_minutes <= 39)
     lineup_data, is_match_finished, score_data = (None, False, None)
     
     if should_fetch_lineup or time_diff_minutes <= -85:
@@ -864,8 +872,8 @@ def check_and_notify():
         else:
             final_score = f"{match['home']} - {match['away']}"
 
-    # 2. Maça Başlamak Üzere (0 - 15 dk kala)
-    elif is_today and 0 <= time_diff_minutes <= 15:
+    # 2. Maça Başlamak Üzere (Sabırlı Bekleme ile 0-39 dk)
+    elif is_today and 0 <= time_diff_minutes <= 39:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
@@ -874,6 +882,13 @@ def check_and_notify():
             lineup = get_fenerbahce_org_lineup(match)
             if not lineup:
                 lineup = get_beinsports_lineup(match)
+                
+        if not lineup:
+            if time_diff_minutes > 17:
+                print(f"[-] Kadro henüz belli değil ({time_diff_minutes:.1f} dk var). Bir sonraki döngü beklenecek.", flush=True)
+                return
+            else:
+                print(f"[-] Maça çok az kaldı ({time_diff_minutes:.1f} dk). Mecburen kadrosuz bildirim atılacak.", flush=True)
 
     # 3. Maç Günü Sabahı (10:00 - 22:00)
     elif is_today and (10 <= now_tr.hour < 22):
@@ -901,10 +916,13 @@ def check_and_notify():
         return
 
     channel_changed = False
+    time_changed = False
     last_notified = state.get("last_notified_match")
     if last_notified and create_notification_key(last_notified) == base_key:
         if set(last_notified.get("channels", [])) != set(match.get("channels", [])):
             channel_changed = True
+        if last_notified.get("time") != match.get("time"):
+            time_changed = True
 
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
@@ -913,12 +931,12 @@ def check_and_notify():
     if notification_type == "MATCH_ENDED":
         highlights_url = get_highlights_url(match)
         keyboard_buttons.append([{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}])
-    elif notification_type in ("STARTING_SOON", "UPCOMING", "DAY_BEFORE"):
+    elif notification_type in ("STARTING_SOON", "UPCOMING", "DAY_BEFORE", "MATCHDAY"):
         keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
 
-    message = create_message(match, notification_type=notification_type, lineup=lineup, score=final_score, channel_changed=channel_changed)
+    message = create_message(match, notification_type=notification_type, lineup=lineup, score=final_score, channel_changed=channel_changed, time_changed=time_changed)
     success, sent_msgs = send_telegram_message(message, reply_markup=reply_markup)
 
     if not success:
