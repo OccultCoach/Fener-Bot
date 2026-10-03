@@ -487,6 +487,7 @@ def get_next_fenerbahce_match():
         return None
 
     today = datetime.now(TURKEY_TZ).date()
+    now_tr = datetime.now(TURKEY_TZ)
     upcoming = []
 
     for match in matches:
@@ -494,7 +495,10 @@ def get_next_fenerbahce_match():
             match_date = date.fromisoformat(match["date"])
         except ValueError:
             continue
-        if match_date >= today or (today - match_date).days <= 1:
+        
+        if match_date >= today:
+            upcoming.append(match)
+        elif (today - match_date).days == 1 and now_tr.hour < 10:
             upcoming.append(match)
 
     if not upcoming:
@@ -837,7 +841,9 @@ def check_and_notify():
 
     is_tomorrow = (match_dt.date() - now_tr.date()).days == 1
 
-    if not is_today and not (now_tr.hour == 10 and now_tr.minute < 30):
+    is_actively_playing = (-220 <= time_diff_minutes <= 5)
+
+    if not is_today and not is_actively_playing and not (now_tr.hour == 10 and now_tr.minute < 30):
         if not (10 <= now_tr.hour < 22):
             print(f"[*] Gece saatlerindeyiz ({now_tr.strftime('%H:%M')}). Uyku modunda kalınıyor.", flush=True)
             save_state(state)
@@ -858,7 +864,7 @@ def check_and_notify():
     if time_diff_minutes <= -85:
         domestic_score = get_score_from_domestic_sources(match)
 
-    is_ended_candidate = (time_diff_minutes <= -115) or is_match_finished or (domestic_score is not None)
+    is_ended_candidate = (time_diff_minutes <= -210) or is_match_finished or (domestic_score is not None)
 
     # 1. Maç Sonu
     if time_diff_minutes <= -85 and is_ended_candidate:
@@ -910,11 +916,6 @@ def check_and_notify():
         save_state(state)
         return
 
-    if target_key in notified_matches:
-        print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}). Yeni bildirim atılmayacak.", flush=True)
-        save_state(state)
-        return
-
     channel_changed = False
     time_changed = False
     last_notified = state.get("last_notified_match")
@@ -923,6 +924,11 @@ def check_and_notify():
             channel_changed = True
         if last_notified.get("time") != match.get("time"):
             time_changed = True
+
+    if target_key in notified_matches and not (channel_changed or time_changed):
+        print(f"\n[*] Bu bildirim daha önce gönderilmiş ({target_key}). Yeni bildirim atılmayacak.", flush=True)
+        save_state(state)
+        return
 
     print(f"\n[*] Yeni bildirim türü: {notification_type}", flush=True)
     print("[*] Telegram bildirimi gönderiliyor...", flush=True)
