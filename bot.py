@@ -486,31 +486,26 @@ def get_next_fenerbahce_match():
     if not links:
         return None
 
-    matches = []
-    for link in links:
-        match = parse_match_detail(link)
-        if match:
-            matches.append(match)
-
-    if not matches:
-        return None
-
     today = datetime.now(TURKEY_TZ).date()
     now_tr = datetime.now(TURKEY_TZ)
     upcoming = []
 
-    for match in matches:
+    for link in links:
+        match = parse_match_detail(link)
+        if not match:
+            continue
+            
         try:
             match_date = date.fromisoformat(match["date"])
         except ValueError:
             continue
-        
+            
         if match_date >= today:
             upcoming.append(match)
         elif (today - match_date).days == 1 and now_tr.hour < 10:
             upcoming.append(match)
             
-        # (MADDE 1 ONAYLI OPTİMİZASYON) Aradığımız sıradaki 2 A Takım maçını bulduktan sonra diğer aylardaki maçları boş yere indirme (Fren):
+        # GERÇEK FREN: Aradığımız sıradaki 2 A Takım maçını bulduğumuz an gereksiz sayfaları İNDİRMEDEN kır!
         if len(upcoming) >= 2:
             break
 
