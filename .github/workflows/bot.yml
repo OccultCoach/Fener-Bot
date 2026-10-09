@@ -2,11 +2,8 @@ name: Fenerbahçe Bot
 
 on:
   schedule:
-    # 1. Sabah Uyanışı: Türkiye saatiyle tam 10:14'te (UTC 07:14) "Bugün Maç Var" bildirimi için 1 kez çalışır.
-    - cron: '14 7 * * *'
-    
-    # 2. Aktif Maç Nöbeti: Türkiye saatiyle 12:14'ten gece 02:59'a kadar (UTC 09:00 - 23:59) her 15 dakikada bir çalışır.
-    - cron: '14,29,44,59 9-23 * * *'
+    # Türkiye saatiyle 10:14'ten gece 02:59'a kadar her 15 dakikada bir çalışır. (GitHub Bug'ını engellemek için Tek Satır Cron)
+    - cron: '14,29,44,59 7-23 * * *'
 
   workflow_dispatch:
 
