@@ -1,10 +1,6 @@
 name: Fenerbahçe Bot
 
 on:
-  schedule:
-    # Türkiye saatiyle 10:14'ten gece 02:59'a kadar her 15 dakikada bir çalışır. (GitHub Bug'ını engellemek için Tek Satır Cron)
-    - cron: '14,29,44,59 7-23 * * *'
-
   workflow_dispatch:
 
 permissions:
