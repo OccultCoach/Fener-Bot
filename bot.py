@@ -516,27 +516,44 @@ def get_next_fenerbahce_match():
     return upcoming[0]
 
 
-def get_score_from_domestic_sources(match):
-    home = match["home"]
-    away = match["away"]
-    
-    print(f"[*] Yerli kaynaklardan skor taranıyor: {home} - {away}", flush=True)
-    try:
-        ntv_url = f"https://www.ntvspor.net/arama?q={requests.utils.quote(home + ' ' + away + ' maç sonucu')}"
-        resp = requests.get(ntv_url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for tag in soup.find_all(["h2", "h3", "p", "span", "a"]):
-                text = tag.get_text()
-                score_match = re.search(r"\b(\d{1,2})\s*[-–:]\s*(\d{1,2})\b", text)
-                if score_match:
-                    found = f"{home} {score_match.group(1)} - {score_match.group(2)} {away}"
-                    print(f"[+] Skor bulundu: {found}", flush=True)
-                    return found
-    except Exception as e:
-        print(f"[-] Skor arama hatası: {e}", flush=True)
+def get_espn_league_code(competition):
+    comp_lower = competition.lower() if competition else ""
+    if "şampiyonlar" in comp_lower or "champions" in comp_lower:
+        return "uefa.champions"
+    elif "avrupa ligi" in comp_lower or "europa" in comp_lower:
+        return "uefa.europa"
+    elif "konferans" in comp_lower or "conference" in comp_lower:
+        return "uefa.conference"
+    elif "kupa" in comp_lower or "cup" in comp_lower:
+        return "tur.cup"
+    return "tur.1"
 
-    return None
+
+def get_mackolik_live_score(match):
+    print(f"[*] 1. Tercih Taranıyor: Maçkolik Canlı Skor servisi...", flush=True)
+    try:
+        url = "https://vd.mackolik.com/livedata?group=0"
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code == 200:
+            events = resp.json().get("e", [])
+            for e in events:
+                if len(e) > 18:
+                    home_name = str(e[8])
+                    away_name = str(e[10])
+                    combined = f"{home_name} {away_name}".lower()
+                    if "fenerbah" in combined:
+                        score_home = e[14]
+                        score_away = e[15]
+                        status = str(e[18]).strip()
+                        status_upper = status.upper()
+                        score_str = f"{home_name} {score_home} - {score_away} {away_name}"
+                        is_finished = status_upper in ("MS", "BİTTİ", "BITTI", "AET", "PEN.") or "MS" in status_upper
+                        print(f"[+] Maçkolik maçı buldu: {score_str} (Durum: {status}, Bitti mi: {is_finished})", flush=True)
+                        return score_str, is_finished
+    except Exception as e:
+        print(f"[-] Maçkolik tarama hatası: {e}", flush=True)
+
+    return None, False
 
 
 def get_fenerbahce_org_lineup(match):
@@ -598,72 +615,81 @@ def get_live_match_data(match, fetch_lineup=True):
     for attempt in range(max_retries + 1):
         if fetch_lineup:
             print(f"[*] ESPN API ilk 11 taranıyor (Deneme {attempt+1}/{max_retries+1})...", flush=True)
+        primary_league = get_espn_league_code(match.get("competition", ""))
+        leagues_to_search = [primary_league]
+        for lg in ["tur.1", "uefa.champions", "uefa.europa", "uefa.conference", "tur.cup", "all"]:
+            if lg not in leagues_to_search:
+                leagues_to_search.append(lg)
+
         try:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={date_str}"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                events = resp.json().get("events", [])
-                target_event = None
-                for ev in events:
-                    if "Fenerbah" in ev.get("name", ""):
-                        target_event = ev
-                        break
-                
+            target_event = None
+            for league_code in leagues_to_search:
+                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/scoreboard?dates={date_str}"
+                resp = requests.get(url, timeout=10)
+                if resp.status_code == 200:
+                    events = resp.json().get("events", [])
+                    for ev in events:
+                        if "Fenerbah" in ev.get("name", ""):
+                            target_event = ev
+                            break
                 if target_event:
-                    event_id = target_event["id"]
-                    is_finished = target_event.get("status", {}).get("type", {}).get("completed", False)
-                    score_text = None
-                    
-                    competitions = target_event.get("competitions", [])
-                    if competitions:
-                        competitors = competitions[0].get("competitors", [])
-                        if len(competitors) == 2:
-                            team1 = competitors[0]
-                            team2 = competitors[1]
-                            if is_finished or target_event.get("status", {}).get("type", {}).get("state") == "in":
-                                t1_name = team1.get("team", {}).get("displayName", "")
-                                t1_score = team1.get("score", "")
-                                t2_name = team2.get("team", {}).get("displayName", "")
-                                t2_score = team2.get("score", "")
-                                if team1.get("homeAway") == "home":
-                                    score_text = f"{t1_name} {t1_score} - {t2_score} {t2_name}"
-                                else:
-                                    score_text = f"{t2_name} {t2_score} - {t1_score} {t1_name}"
-                                
-                    lineup_roles = None
-                    if fetch_lineup:
-                        summary_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}"
-                        sum_resp = requests.get(summary_url, timeout=10)
-                        if sum_resp.status_code == 200:
-                            rosters = sum_resp.json().get("rosters", [])
-                            for r in rosters:
-                                if "Fenerbah" in r.get("team", {}).get("displayName", ""):
-                                    players = r.get("roster", [])
-                                    roles = {"GK": [], "DF": [], "MF": [], "FW": []}
-                                    starter_count = 0
-                                    for p in players:
-                                        if p.get("starter", False):
-                                            starter_count += 1
-                                            name = p.get("athlete", {}).get("displayName", "")
-                                            pos_abbr = p.get("position", {}).get("abbreviation", "M").upper()
+                    break
+                
+            if target_event:
+                event_id = target_event["id"]
+                is_finished = target_event.get("status", {}).get("type", {}).get("completed", False)
+                score_text = None
+                
+                competitions = target_event.get("competitions", [])
+                if competitions:
+                    competitors = competitions[0].get("competitors", [])
+                    if len(competitors) == 2:
+                        team1 = competitors[0]
+                        team2 = competitors[1]
+                        if is_finished or target_event.get("status", {}).get("type", {}).get("state") == "in":
+                            t1_name = team1.get("team", {}).get("displayName", "")
+                            t1_score = team1.get("score", "")
+                            t2_name = team2.get("team", {}).get("displayName", "")
+                            t2_score = team2.get("score", "")
+                            if team1.get("homeAway") == "home":
+                                score_text = f"{t1_name} {t1_score} - {t2_score} {t2_name}"
+                            else:
+                                score_text = f"{t2_name} {t2_score} - {t1_score} {t1_name}"
+                            
+                lineup_roles = None
+                if fetch_lineup:
+                    summary_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event={event_id}"
+                    sum_resp = requests.get(summary_url, timeout=10)
+                    if sum_resp.status_code == 200:
+                        rosters = sum_resp.json().get("rosters", [])
+                        for r in rosters:
+                            if "Fenerbah" in r.get("team", {}).get("displayName", ""):
+                                players = r.get("roster", [])
+                                roles = {"GK": [], "DF": [], "MF": [], "FW": []}
+                                starter_count = 0
+                                for p in players:
+                                    if p.get("starter", False):
+                                        starter_count += 1
+                                        name = p.get("athlete", {}).get("displayName", "")
+                                        pos_abbr = p.get("position", {}).get("abbreviation", "M").upper()
+                                        role = "MF"
+                                        if "G" in pos_abbr:
+                                            role = "GK"
+                                        elif "D" in pos_abbr or "B" in pos_abbr:
+                                            if "M" in pos_abbr: role = "MF"
+                                            else: role = "DF"
+                                        elif "M" in pos_abbr:
                                             role = "MF"
-                                            if "G" in pos_abbr:
-                                                role = "GK"
-                                            elif "D" in pos_abbr or "B" in pos_abbr:
-                                                if "M" in pos_abbr: role = "MF"
-                                                else: role = "DF"
-                                            elif "M" in pos_abbr:
-                                                role = "MF"
-                                            elif "F" in pos_abbr or "S" in pos_abbr or "W" in pos_abbr:
-                                                role = "FW"
-                                            roles[role].append(name)
-                                            
-                                    if starter_count >= 11:
-                                        lineup_roles = roles
-                                        print("[+] ESPN API'den ilk 11 başarıyla alındı.", flush=True)
-                                        return lineup_roles, is_finished, score_text
+                                        elif "F" in pos_abbr or "S" in pos_abbr or "W" in pos_abbr:
+                                            role = "FW"
+                                        roles[role].append(name)
                                         
-                    return lineup_roles, is_finished, score_text
+                                if starter_count >= 11:
+                                    lineup_roles = roles
+                                    print("[+] ESPN API'den ilk 11 başarıyla alındı.", flush=True)
+                                    return lineup_roles, is_finished, score_text
+                                    
+                return lineup_roles, is_finished, score_text
 
             if fetch_lineup:
                 print("[-] ESPN'de ilk 11 henüz doğrulanmadı.", flush=True)
@@ -865,24 +891,35 @@ def check_and_notify():
     should_fetch_lineup = (0 <= time_diff_minutes <= 39)
     lineup_data, is_match_finished, score_data = (None, False, None)
     
-    if should_fetch_lineup or time_diff_minutes <= -85:
-        lineup_data, is_match_finished, score_data = get_live_match_data(match, fetch_lineup=should_fetch_lineup)
+    # 1. Maç Öncesi Kadro (Sadece ESPN üzerinden mevkili kadro)
+    if should_fetch_lineup:
+        lineup_data, _, _ = get_live_match_data(match, fetch_lineup=True)
 
-    domestic_score = None
+    # 2. Maç Sonu ve Skor (1. Tercih: Maçkolik, 2. Tercih: ESPN API, 3. Tercih: -210 dk Giyotin)
+    mackolik_score = None
+    mackolik_finished = False
+
     if time_diff_minutes <= -85:
-        domestic_score = get_score_from_domestic_sources(match)
+        # Önce Maçkolik'e sor (En hızlı yerli anlık teyit)
+        mackolik_score, mackolik_finished = get_mackolik_live_score(match)
+        
+        # Eğer Maçkolik henüz bitiş vermediyse veya maçı bulamadıysa ESPN API'ye sor
+        if not mackolik_finished:
+            _, is_match_finished, score_data = get_live_match_data(match, fetch_lineup=False)
 
-    is_ended_candidate = (time_diff_minutes <= -210) or is_match_finished or (domestic_score is not None)
+    is_ended_candidate = (time_diff_minutes <= -210) or mackolik_finished or is_match_finished
 
     # 1. Maç Sonu
     if time_diff_minutes <= -85 and is_ended_candidate:
         target_key = f"ENDED|{base_key}"
         notification_type = "MATCH_ENDED"
         
-        if score_data:
+        if mackolik_score and mackolik_finished:
+            final_score = mackolik_score
+        elif score_data:
             final_score = score_data
-        elif domestic_score:
-            final_score = domestic_score
+        elif mackolik_score:
+            final_score = mackolik_score
         else:
             final_score = f"{match['home']} - {match['away']}"
 
