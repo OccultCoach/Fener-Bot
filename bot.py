@@ -556,56 +556,283 @@ def get_mackolik_live_score(match):
     return None, False
 
 
-def get_fenerbahce_org_lineup(match):
-    print("[*] 1. Yedek Taranıyor: Fenerbahce.org resmi haber akışı...", flush=True)
+def get_fotmob_lineup(match):
+    print("[*] 1. Yedek Taranıyor: FotMob resmi veri tabanı...", flush=True)
     try:
-        url = "https://www.fenerbahce.org/haberler/futbol"
+        url = "https://www.fotmob.com/teams/8695/overview/fenerbahce"
         resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
+        if resp.status_code != 200:
+            print(f"[-] FotMob takım sayfası yanıt vermedi ({resp.status_code})", flush=True)
+            return None
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        script = soup.find("script", id="__NEXT_DATA__")
+        if not script or not script.string:
+            return None
+
+        data = json.loads(script.string)
+        fallback = data.get("props", {}).get("pageProps", {}).get("fallback", {})
+        team_data = fallback.get("team-8695", {})
+
+        target_page_url = None
+        next_match = team_data.get("overview", {}).get("nextMatch", {})
+        if next_match and next_match.get("pageUrl"):
+            target_page_url = next_match["pageUrl"]
+
+        if not target_page_url:
+            fixtures = team_data.get("fixtures", {}).get("allFixtures", {}).get("fixtures", [])
+            for fix in fixtures:
+                if fix.get("notStarted") and fix.get("pageUrl"):
+                    target_page_url = fix["pageUrl"]
+                    break
+
+        if not target_page_url:
+            print("[-] FotMob'da yaklaşan maç bağlantısı bulunamadı.", flush=True)
+            return None
+
+        clean_path = target_page_url.split("#")[0]
+        match_full_url = "https://www.fotmob.com" + clean_path
+        m_resp = requests.get(match_full_url, headers=HEADERS, timeout=10)
+        if m_resp.status_code != 200:
+            return None
+
+        m_soup = BeautifulSoup(m_resp.text, "html.parser")
+        m_script = m_soup.find("script", id="__NEXT_DATA__")
+        if not m_script or not m_script.string:
+            return None
+
+        m_data = json.loads(m_script.string)
+        content = m_data.get("props", {}).get("pageProps", {}).get("content", {})
+        lineup_data = content.get("lineup", {})
+        if not lineup_data:
+            return None
+
+        home_team = lineup_data.get("homeTeam", {})
+        away_team = lineup_data.get("awayTeam", {})
+        target_team = None
+        if home_team.get("id") == 8695 or "Fenerbah" in home_team.get("name", ""):
+            target_team = home_team
+        elif away_team.get("id") == 8695 or "Fenerbah" in away_team.get("name", ""):
+            target_team = away_team
+
+        if not target_team:
+            return None
+
+        starters = target_team.get("starters", [])
+        subs = target_team.get("subs", [])
+
+        if len(starters) < 11:
+            print("[-] FotMob'da ilk 11 henüz kesinleşmemiş.", flush=True)
+            return None
+
+        roles = {"GK": [], "DF": [], "MF": [], "FW": [], "BENCH": []}
+        for p in starters:
+            name = p.get("name", "")
+            if not name:
+                continue
+            pos = p.get("usualPlayingPositionId", 2)
+            if pos == 0:
+                roles["GK"].append(name)
+            elif pos == 1:
+                roles["DF"].append(name)
+            elif pos == 2:
+                roles["MF"].append(name)
+            elif pos == 3:
+                roles["FW"].append(name)
+            else:
+                roles["MF"].append(name)
+
+        for s in subs:
+            s_name = s.get("name", "")
+            if s_name:
+                roles["BENCH"].append(s_name)
+
+        print(f"[+] FotMob'dan ilk 11 ({len(starters)}) ve yedekler ({len(roles['BENCH'])}) alındı.", flush=True)
+        return roles
+
+    except Exception as e:
+        print(f"[-] FotMob tarama hatası: {e}", flush=True)
+        return None
+
+
+def get_flashscore_lineup(match):
+    print("[*] 2. Yedek Taranıyor: Flashscore Mobi akışı...", flush=True)
+    headers_mobi = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
+    }
+    try:
+        match_id = None
+        is_home = True
+
+        for day in [0, 1]:
+            url = f"https://www.flashscore.mobi/?d={day}" if day != 0 else "https://www.flashscore.mobi"
+            resp = requests.get(url, headers=headers_mobi, timeout=10)
+            if resp.status_code != 200:
+                continue
             soup = BeautifulSoup(resp.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                title = a.get_text(" ", strip=True).lower()
+            score_div = soup.find("div", {"id": "score-data"})
+            if not score_div:
+                continue
+
+            for a in score_div.find_all("a", href=True):
                 href = a["href"]
-                if any(k in title for k in ["ilk 11", "11'i", "kadromuz", "kadro", "kamp kadro", "maç kadro"]):
-                    full_article_url = "https://www.fenerbahce.org" + href if href.startswith("/") else href
-                    art_resp = requests.get(full_article_url, headers=HEADERS, timeout=10)
-                    if art_resp.status_code == 200:
-                        art_soup = BeautifulSoup(art_resp.text, "html.parser")
-                        for p in art_soup.find_all(["p", "div", "ul"]):
-                            text = normalize_text(p.get_text(" ", strip=True))
-                            if 30 < len(text) < 450 and (text.count(",") >= 5 or text.count("-") >= 5 or "Fenerbahçe:" in text):
-                                print("[+] Fenerbahce.org üzerinden ilk 11 bulundu.", flush=True)
-                                return text
+                if "/match/" in href:
+                    prev_txt = str(a.previous_sibling or "")
+                    if "fenerbah" in prev_txt.lower():
+                        parts = href.strip("/").split("/")
+                        if len(parts) >= 2:
+                            match_id = parts[1].split("?")[0]
+                            teams = prev_txt.split("-")
+                            if len(teams) >= 2 and "fenerbah" in teams[1].lower():
+                                is_home = False
+                            break
+            if match_id:
+                break
+
+        if not match_id:
+            print("[-] Flashscore'da Fenerbahçe maçı bulunamadı.", flush=True)
+            return None
+
+        lineup_url = f"https://www.flashscore.mobi/match/{match_id}/?t=lineups"
+        l_resp = requests.get(lineup_url, headers=headers_mobi, timeout=10)
+        if l_resp.status_code != 200:
+            return None
+
+        l_soup = BeautifulSoup(l_resp.text, "html.parser")
+        tables = l_soup.find_all("table", {"class": "lineup"})
+        if len(tables) < 2:
+            print("[-] Flashscore'da kadro tabloları henüz hazır değil.", flush=True)
+            return None
+
+        starter_table_idx = 0 if is_home else (2 if len(tables) >= 4 else 0)
+        sub_table_idx = 1 if is_home else (3 if len(tables) >= 4 else 1)
+
+        starter_rows = tables[starter_table_idx].find_all("tr")
+        starters = []
+        for r in starter_rows:
+            tds = r.find_all("td")
+            if len(tds) >= 2:
+                starters.append(tds[1].text.strip())
+
+        if len(starters) < 11:
+            print("[-] Flashscore ilk 11 eksik.", flush=True)
+            return None
+
+        sub_rows = tables[sub_table_idx].find_all("tr")
+        subs = []
+        for r in sub_rows:
+            tds = r.find_all("td")
+            if len(tds) >= 2:
+                subs.append(tds[1].text.strip())
+
+        gk_player = None
+        outfield = []
+        for p_name in starters:
+            clean_name = p_name.replace("(G)", "").replace("(C)", "").strip()
+            if "(G)" in p_name and not gk_player:
+                gk_player = clean_name
+            else:
+                outfield.append(clean_name)
+
+        if not gk_player and outfield:
+            gk_player = outfield.pop(0)
+
+        roles = {
+            "GK": [gk_player] if gk_player else [],
+            "DF": outfield[:4],
+            "MF": outfield[4:7],
+            "FW": outfield[7:],
+            "BENCH": []
+        }
+
+        for s_name in subs:
+            clean_sub = s_name.replace("(G)", "").replace("(C)", "").strip()
+            if clean_sub:
+                roles["BENCH"].append(clean_sub)
+
+        print(f"[+] Flashscore'dan ilk 11 ({len(starters)}) ve yedekler ({len(roles['BENCH'])}) alındı.", flush=True)
+        return roles
+
     except Exception as e:
-        print(f"[-] Fenerbahce.org tarama hatası: {e}", flush=True)
-    return None
+        print(f"[-] Flashscore tarama hatası: {e}", flush=True)
+        return None
 
 
-def get_beinsports_lineup(match):
-    print("[*] 2. Yedek Taranıyor: beIN Sports Canlı Maç Merkezi...", flush=True)
-    home = match["home"]
-    away = match["away"]
-    query = requests.utils.quote(f"{home} {away} ilk 11 kadrolar")
+def get_api_football_lineup(match):
+    api_key = os.getenv("API_FOOTBALL_KEY")
+    if not api_key:
+        return None
+
+    print("[*] 3. Yedek Taranıyor: API-Football (RapidAPI)...", flush=True)
     try:
-        url = f"https://beinsports.com.tr/arama?q={query}"
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for link in soup.find_all("a", href=True):
-                href = link["href"]
-                if "/mac-merkezi/" in href or "/haber/" in href or "/canli-skor/" in href:
-                    detail_url = "https://beinsports.com.tr" + href if href.startswith("/") else href
-                    d_resp = requests.get(detail_url, headers=HEADERS, timeout=10)
-                    if d_resp.status_code == 200:
-                        d_soup = BeautifulSoup(d_resp.text, "html.parser")
-                        for tag in d_soup.find_all(["div", "p", "section"]):
-                            text = normalize_text(tag.get_text(" ", strip=True))
-                            if "ilk 11" in text.lower() and "fenerbahçe" in text.lower() and 40 < len(text) < 450:
-                                print("[+] beIN Sports üzerinden ilk 11 bulundu.", flush=True)
-                                return text
+        headers = {
+            "x-rapidapi-host": "v3.football.api-sports.io",
+            "x-rapidapi-key": api_key
+        }
+        date_str = match.get("date", "")
+        fixtures_url = f"https://v3.football.api-sports.io/fixtures?team=645&date={date_str}"
+        resp = requests.get(fixtures_url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        response_list = data.get("response", [])
+        if not response_list:
+            return None
+
+        fixture_id = response_list[0].get("fixture", {}).get("id")
+        if not fixture_id:
+            return None
+
+        lineup_url = f"https://v3.football.api-sports.io/fixtures/lineups?fixture={fixture_id}"
+        l_resp = requests.get(lineup_url, headers=headers, timeout=10)
+        if l_resp.status_code != 200:
+            return None
+
+        l_data = l_resp.json()
+        l_teams = l_data.get("response", [])
+        target_team = None
+        for t in l_teams:
+            if t.get("team", {}).get("id") == 645 or "Fenerbah" in t.get("team", {}).get("name", ""):
+                target_team = t
+                break
+
+        if not target_team:
+            return None
+
+        start_xi = target_team.get("startXI", [])
+        substitutes = target_team.get("substitutes", [])
+        if len(start_xi) < 11:
+            return None
+
+        roles = {"GK": [], "DF": [], "MF": [], "FW": [], "BENCH": []}
+        for item in start_xi:
+            p = item.get("player", {})
+            name = p.get("name", "")
+            pos = p.get("pos", "M")
+            if pos == "G":
+                roles["GK"].append(name)
+            elif pos == "D":
+                roles["DF"].append(name)
+            elif pos == "M":
+                roles["MF"].append(name)
+            elif pos == "F":
+                roles["FW"].append(name)
+            else:
+                roles["MF"].append(name)
+
+        for item in substitutes:
+            p = item.get("player", {})
+            name = p.get("name", "")
+            if name:
+                roles["BENCH"].append(name)
+
+        print(f"[+] API-Football'dan ilk 11 ({len(start_xi)}) ve yedekler ({len(roles['BENCH'])}) alındı.", flush=True)
+        return roles
+
     except Exception as e:
-        print(f"[-] beIN Sports tarama hatası: {e}", flush=True)
-    return None
+        print(f"[-] API-Football tarama hatası: {e}", flush=True)
+        return None
 
 
 def get_live_match_data(match, fetch_lineup=True):
@@ -665,12 +892,14 @@ def get_live_match_data(match, fetch_lineup=True):
                         for r in rosters:
                             if "Fenerbah" in r.get("team", {}).get("displayName", ""):
                                 players = r.get("roster", [])
-                                roles = {"GK": [], "DF": [], "MF": [], "FW": []}
+                                roles = {"GK": [], "DF": [], "MF": [], "FW": [], "BENCH": []}
                                 starter_count = 0
                                 for p in players:
+                                    name = p.get("athlete", {}).get("displayName", "")
+                                    if not name:
+                                        continue
                                     if p.get("starter", False):
                                         starter_count += 1
-                                        name = p.get("athlete", {}).get("displayName", "")
                                         pos_abbr = p.get("position", {}).get("abbreviation", "M").upper()
                                         role = "MF"
                                         if "G" in pos_abbr:
@@ -683,10 +912,12 @@ def get_live_match_data(match, fetch_lineup=True):
                                         elif "F" in pos_abbr or "S" in pos_abbr or "W" in pos_abbr:
                                             role = "FW"
                                         roles[role].append(name)
+                                    else:
+                                        roles["BENCH"].append(name)
                                         
                                 if starter_count >= 11:
                                     lineup_roles = roles
-                                    print("[+] ESPN API'den ilk 11 başarıyla alındı.", flush=True)
+                                    print(f"[+] ESPN API'den ilk 11 ve {len(roles['BENCH'])} yedek başarıyla alındı.", flush=True)
                                     return lineup_roles, is_finished, score_text
                                     
                 return lineup_roles, is_finished, score_text
@@ -697,8 +928,8 @@ def get_live_match_data(match, fetch_lineup=True):
             print(f"[-] ESPN bağlantı hatası: {e}", flush=True)
 
         if fetch_lineup and attempt < max_retries:
-            print("[*] 2 dakika beklenip son deneme yapılacak...", flush=True)
-            time.sleep(120)
+            print("[*] 20 saniye beklenip son deneme yapılacak...", flush=True)
+            time.sleep(20)
 
     if fetch_lineup:
         print("[-] ESPN süreci tamamlandı ve kadro bulunamadı. Yedek kaynaklar çağrılıyor...", flush=True)
@@ -745,12 +976,17 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             df_text = ", ".join(lineup.get("DF", []))
             mf_text = ", ".join(lineup.get("MF", []))
             fw_text = ", ".join(lineup.get("FW", []))
+            bench_list = lineup.get("BENCH", [])
+            bench_text = ", ".join(bench_list)
+
+            bench_block = f"🪑 <b>YEDEKLER:</b>\n{bench_text}\n\n" if bench_text else ""
             lineup_block = (
                 f"📋 <b>İLK 11'İMİZ:</b>\n"
                 f"🧤 <b>Kaleci:</b> {gk_text}\n"
                 f"🛡 <b>Defans:</b> {df_text}\n"
                 f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
                 f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
+                f"{bench_block}"
             )
         elif isinstance(lineup, str) and len(lineup.strip()) > 0:
             lineup_block = f"📋 <b>İLK 11 BİLGİSİ:</b>\n<i>{lineup}</i>\n\n"
@@ -888,10 +1124,10 @@ def check_and_notify():
     lineup = None
     final_score = None
 
-    should_fetch_lineup = (0 <= time_diff_minutes <= 39)
+    should_fetch_lineup = (0 <= time_diff_minutes <= 24)
     lineup_data, is_match_finished, score_data = (None, False, None)
     
-    # 1. Maç Öncesi Kadro (Sadece ESPN üzerinden mevkili kadro)
+    # 1. Maç Öncesi Kadro (Öncelik 1: ESPN API)
     if should_fetch_lineup:
         lineup_data, _, _ = get_live_match_data(match, fetch_lineup=True)
 
@@ -923,19 +1159,24 @@ def check_and_notify():
         else:
             final_score = f"{match['home']} - {match['away']}"
 
-    # 2. Maça Başlamak Üzere (Sabırlı Bekleme ile 0-39 dk)
-    elif is_today and 0 <= time_diff_minutes <= 39:
+    # 2. Maça Başlamak Üzere (Sabırlı Bekleme ile 0-24 dk)
+    elif is_today and 0 <= time_diff_minutes <= 24:
         target_key = f"SOON|{base_key}"
         notification_type = "STARTING_SOON"
         lineup = lineup_data
 
         if not lineup:
-            lineup = get_fenerbahce_org_lineup(match)
+            # 1. Yedek: FotMob
+            lineup = get_fotmob_lineup(match)
             if not lineup:
-                lineup = get_beinsports_lineup(match)
+                # 2. Yedek: Flashscore Mobi
+                lineup = get_flashscore_lineup(match)
+                if not lineup:
+                    # 3. Yedek: API-Football (Opsiyonel API Anahtarı)
+                    lineup = get_api_football_lineup(match)
                 
         if not lineup:
-            if time_diff_minutes > 17:
+            if time_diff_minutes > 10:
                 print(f"[-] Kadro henüz belli değil ({time_diff_minutes:.1f} dk var). Bir sonraki döngü beklenecek.", flush=True)
                 return
             else:
