@@ -960,97 +960,233 @@ def get_highlights_url(match):
     return f"https://www.youtube.com/results?search_query={encoded_query}&sp=EgIIAg%253D%253D"
 
 
+TURKISH_MONTHS = ["", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+TURKISH_DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+
+PLAYER_NAME_REPLACEMENTS = {
+    "munir mercan": "Levent Mercan",
+    "münir mercan": "Levent Mercan",
+    "münir levent mercan": "Levent Mercan",
+    "munir levent mercan": "Levent Mercan",
+    "irfan can kahveci": "İrfan Can Kahveci",
+    "oguz aydin": "Oğuz Aydın",
+    "kerem akturkoglu": "Kerem Aktürkoğlu",
+    "kerem aktürkoglu": "Kerem Aktürkoğlu",
+    "mert gunok": "Mert Günok",
+    "mert muldur": "Mert Müldür",
+    "yigit efe demir": "Yiğit Efe Demir",
+    "bartug elmaz": "Bartuğ Elmaz",
+    "ismail yuksek": "İsmail Yüksek",
+    "mert hakan yandas": "Mert Hakan Yandaş",
+    "caglar soyuncu": "Çağlar Söyüncü",
+    "cenk tosun": "Cenk Tosun",
+    "cengiz under": "Cengiz Ünder",
+    "samet akaydin": "Samet Akaydin",
+}
+
+TEAM_NAME_REPLACEMENTS = {
+    "caykur rizespor": "Çaykur Rizespor",
+    "fenerbahce": "Fenerbahçe",
+    "besiktas": "Beşiktaş",
+    "goztepe": "Göztepe",
+    "basaksehir": "Başakşehir",
+    "istanbul basaksehir": "İstanbul Başakşehir",
+    "kasimpasa": "Kasımpaşa",
+    "gaziantep fk": "Gaziantep FK",
+    "antalyaspor": "Antalyaspor",
+    "konyaspor": "Konyaspor",
+    "sivasspor": "Sivasspor",
+    "trabzonspor": "Trabzonspor",
+    "galatasaray": "Galatasaray",
+    "alanyaspor": "Alanyaspor",
+    "bodrum fk": "Bodrum FK",
+    "eyupspor": "Eyüpspor",
+    "adana demirspor": "Adana Demirspor",
+    "kayserispor": "Kayserispor",
+    "samsunspor": "Samsunspor",
+    "hatayspor": "Hatayspor",
+}
+
+
+def clean_player_name(name):
+    if not name:
+        return ""
+    name_str = name.strip()
+    low = name_str.lower()
+    if low in PLAYER_NAME_REPLACEMENTS:
+        return PLAYER_NAME_REPLACEMENTS[low]
+    if name_str.startswith("I") and not name_str.startswith("İ"):
+        name_str = "İ" + name_str[1:]
+    return name_str
+
+
+def clean_team_name(name):
+    if not name:
+        return ""
+    name_str = name.strip()
+    low = name_str.lower()
+    if low in TEAM_NAME_REPLACEMENTS:
+        return TEAM_NAME_REPLACEMENTS[low]
+    return name_str
+
+
+def format_turkish_date(dt_str):
+    try:
+        d = date.fromisoformat(dt_str)
+        return f"{d.day} {TURKISH_MONTHS[d.month]} {TURKISH_DAYS[d.weekday()]}"
+    except Exception:
+        return dt_str
+
+
+def parse_score_outcome(score_text, home_team, away_team):
+    if not score_text:
+        return f"{clean_team_name(home_team)} — {clean_team_name(away_team)}", "UNKNOWN"
+
+    m = re.search(r'(\d+)\s*[-–:]\s*(\d+)', score_text)
+    if not m:
+        return score_text, "UNKNOWN"
+
+    s1 = int(m.group(1))
+    s2 = int(m.group(2))
+
+    clean_score = score_text
+    for raw, clean in TEAM_NAME_REPLACEMENTS.items():
+        clean_score = re.sub(rf'\b{raw}\b', clean, clean_score, flags=re.IGNORECASE)
+
+    clean_score = re.sub(r'(\d+)\s*[-–:]\s*(\d+)', r'\1 — \2', clean_score)
+
+    before = score_text[:m.start()].lower()
+    after = score_text[m.end():].lower()
+
+    if "fenerbah" in before:
+        fb_is_team1 = True
+    elif "fenerbah" in after:
+        fb_is_team1 = False
+    else:
+        fb_is_team1 = "fenerbah" in (home_team or "").lower()
+
+    if fb_is_team1:
+        fb_score = s1
+        opp_score = s2
+    else:
+        fb_score = s2
+        opp_score = s1
+
+    if fb_score > opp_score:
+        outcome = "WIN"
+    elif fb_score < opp_score:
+        outcome = "LOSS"
+    else:
+        outcome = "DRAW"
+
+    return clean_score, outcome
+
+
 def create_notification_key(match):
     return f"{match['date']}|{match['home']}|{match['away']}"
 
 
 def create_message(match, notification_type="UPCOMING", lineup=None, score=None, channel_changed=False, time_changed=False):
-    match_date = date.fromisoformat(match["date"])
-    channel_text = " / ".join(match["channels"]) if match["channels"] else "Henüz belirtilmemiş"
+    home = clean_team_name(match.get("home", ""))
+    away = clean_team_name(match.get("away", ""))
+    date_formatted = format_turkish_date(match.get("date", ""))
+    channel_text = " / ".join(match["channels"]) if match.get("channels") else "Henüz belirtilmemiş"
 
     msg = ""
     if notification_type == "STARTING_SOON":
         lineup_block = ""
         if isinstance(lineup, dict):
-            gk_text = ", ".join(lineup.get("GK", []))
-            df_text = ", ".join(lineup.get("DF", []))
-            mf_text = ", ".join(lineup.get("MF", []))
-            fw_text = ", ".join(lineup.get("FW", []))
-            bench_list = lineup.get("BENCH", [])
+            gk_list = [clean_player_name(p) for p in lineup.get("GK", []) if p]
+            df_list = [clean_player_name(p) for p in lineup.get("DF", []) if p]
+            mf_list = [clean_player_name(p) for p in lineup.get("MF", []) if p]
+            fw_list = [clean_player_name(p) for p in lineup.get("FW", []) if p]
+            bench_list = [clean_player_name(p) for p in lineup.get("BENCH", []) if p]
+
+            gk_text = " • ".join(gk_list)
+            df_text = " • ".join(df_list)
+            mf_text = " • ".join(mf_list)
+            fw_text = " • ".join(fw_list)
             bench_text = ", ".join(bench_list)
 
-            bench_block = f"🪑 <b>YEDEKLER:</b>\n{bench_text}\n\n" if bench_text else ""
             lineup_block = (
                 f"📋 <b>İLK 11'İMİZ:</b>\n"
-                f"🧤 <b>Kaleci:</b> {gk_text}\n"
-                f"🛡 <b>Defans:</b> {df_text}\n"
-                f"⚙️ <b>Orta Saha:</b> {mf_text}\n"
-                f"⚡️ <b>Hücum:</b> {fw_text}\n\n"
-                f"{bench_block}"
+                f"🧤 <b>K:</b> {gk_text}\n"
+                f"🛡 <b>D:</b> {df_text}\n"
+                f"⚙️ <b>O:</b> {mf_text}\n"
+                f"⚡️ <b>F:</b> {fw_text}\n\n"
             )
+            if bench_text:
+                lineup_block += f"🪑 <b>Yedekler:</b>\n{bench_text}\n\n"
         elif isinstance(lineup, str) and len(lineup.strip()) > 0:
-            lineup_block = f"📋 <b>İLK 11 BİLGİSİ:</b>\n<i>{lineup}</i>\n\n"
+            lineup_block = f"📋 <b>KADRO BİLGİSİ:</b>\n<i>{lineup}</i>\n\n"
 
         msg = (
-            f"🔥 🔵 <b>MAÇ BAŞLAMAK ÜZERE!</b> 🟡 🔥\n\n"
+            f"🔥 <b>MAÇ BAŞLAMAK ÜZERE!</b> ⚔️\n\n"
+            f"⚽️ <b>{home} — {away}</b>\n"
+            f"⏰ <b>{match['time']}</b> | 📺 <b>{channel_text}</b>\n\n"
             f"{lineup_block}"
-            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
-            f"🏆 <i>{match['competition']}</i>\n"
-            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
-            f"⏰ <b>Saat:</b> {match['time']}\n"
-            f"📺 <b>Kanal:</b> {channel_text}\n\n"
-            f"💛💙 <i>Haydi Fenerbahçeli! Ekran başına geçme zamanı.</i>"
+            f"💛💙 <b>Ekran başına! Zafer için sahaya!</b>"
         )
 
     elif notification_type == "MATCH_ENDED":
-        match_title = score if score else f"{match['home']} - {match['away']}"
+        clean_score_title, outcome = parse_score_outcome(score, home, away)
+        if outcome == "WIN":
+            header = "🏁 <b>MAÇ SONUCU | ZAFER BİZİM!</b> 🎉 🟡🔵"
+            footer = "🔥 <b>Tebrikler Fenerbahçem! Sahadan muhteşem bir zaferle ayrılıyoruz.</b> 👏\n\n<i>Karşılaşmanın özet görüntüleri ve golleri için aşağıdaki butona basınız:</i>"
+        elif outcome == "LOSS":
+            header = "🏁 <b>MAÇ SONUCU</b> 💛💙"
+            footer = "💛💙 <b>Başını dik tut Fenerbahçeli! Düştüğümüz yerden daha güçlü kalkacağız. Bu şanlı arma hiçbir zaman yalnız kalmadı, kalmayacak!</b>\n\n<i>Karşılaşmanın geniş özeti için aşağıdaki butona basınız:</i>"
+        elif outcome == "DRAW":
+            header = "🏁 <b>MAÇ SONUCU</b> 🟡🔵"
+            footer = "💛💙 <b>Mücadele beraberlikle sonuçlandı. Önümüzde uzun bir maraton var; mücadeleye ve armanın peşinde koşmaya devam!</b>\n\n<i>Karşılaşmanın özet görüntüleri için aşağıdaki butona basınız:</i>"
+        else:
+            header = "🏁 <b>MAÇ SONUCU</b> 🟡🔵"
+            footer = "💛💙 <b>Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız.</b>"
+
         msg = (
-            f"🏁 💛 <b>MAÇ SONA ERDİ!</b> 💙 🎉\n\n"
-            f"⚽️ <b>{match_title}</b>\n"
-            f"🏆 <i>{match['competition']}</i>\n"
-            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n\n"
-            f"🟡🔵 Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız."
+            f"{header}\n\n"
+            f"⚽️ <b>{clean_score_title}</b>\n"
+            f"🏆 <i>{match['competition']}</i> • <i>Karşılaşma Sona Erdi</i>\n\n"
+            f"{footer}"
         )
 
     elif notification_type == "DAY_BEFORE":
         msg = (
-            f"⏳ 🟡 <b>YARIN MAÇIMIZ VAR!</b> 🔵\n\n"
-            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"⏳ <b>BÜYÜK GÜNE SON 24 SAAT!</b> 🟡🔵\n\n"
+            f"⚽️ <b>{home} — {away}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
-            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
-            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"📅 <b>Yarın ({date_formatted})</b> | ⏰ <b>{match['time']}</b>\n"
             f"📺 <b>Kanal:</b> {channel_text}\n\n"
-            f"💛💙 <i>Büyük güne son 1 gün! Hazırlıklar başlasın!</i>"
+            f"💛💙 <i>Formanı hazırla, nefesler tutuldu!</i>"
         )
 
     elif notification_type == "MATCHDAY":
         msg = (
-            f"📣 🟡 <b>BUGÜN FENERBAHÇEMİZİN MAÇI VAR!</b> 🔵\n\n"
-            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"☀️ <b>BUGÜN GÜNLERDEN FENERBAHÇE!</b> 🟡🔵\n\n"
+            f"⚽️ <b>{home} — {away}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
-            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
-            f"⏰ <b>Saat:</b> {match['time']}\n"
+            f"⏰ <b>{match['time']}</b> | 📅 <b>Bugün</b>\n"
             f"📺 <b>Kanal:</b> {channel_text}\n\n"
-            f"💛💙 <i>Ve sonunda büyük gün geldi! Başarılar Fenerbahçem!</i>"
+            f"💛💙 <b>Vurduğun gol olsun, saldır şanlı Fenerbahçe!</b>"
         )
 
     else:
         msg = (
-            f"📅 🟡 <b>FENERBAHÇEMİZİN YAKLAŞAN MAÇI</b> 🔵\n\n"
-            f"⚽️ <b>{match['home']} - {match['away']}</b>\n"
+            f"📅 <b>SIRADAKİ KARŞILAŞMAMIZ</b> 🟡🔵\n\n"
+            f"⚽️ <b>{home} — {away}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
-            f"📅 <b>Tarih:</b> {match_date.strftime('%d.%m.%Y')}\n"
-            f"⏰ <b>Saat:</b> {match['time']}\n"
-            f"📺 <b>Kanal:</b> {channel_text}"
+            f"📅 <b>{date_formatted}</b> | ⏰ <b>{match['time']}</b>\n"
+            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"💛💙 <i>Armanın peşinde, adım adım zafere!</i>"
         )
-        
+
     if channel_changed and time_changed:
-        msg += "\n\n📢 <i>Not: Maçın saati ve yayınlanacağı kanal güncellenmiştir!</i>"
+        msg += f"\n\n⚠️ <b>DİKKAT:</b> <i>Maçın başlama saati ({match['time']}) ve yayın kanalı ({channel_text}) güncellenmiştir!</i>"
     elif channel_changed:
-        msg += "\n\n📢 <i>Not: Maçın yayınlanacağı kanal güncellenmiştir!</i>"
+        msg += f"\n\n⚠️ <b>DİKKAT:</b> <i>Maçın yayın kanalı ({channel_text}) olarak güncellenmiştir!</i>"
     elif time_changed:
-        msg += "\n\n📢 <i>Not: Maçın saati güncellenmiştir!</i>"
-        
+        msg += f"\n\n⚠️ <b>DİKKAT:</b> <i>Maçın başlama saati ({match['time']}) olarak güncellenmiştir!</i>"
+
     return msg
 
 
@@ -1222,9 +1358,20 @@ def check_and_notify():
     keyboard_buttons = []
     if notification_type == "MATCH_ENDED":
         highlights_url = get_highlights_url(match)
-        keyboard_buttons.append([{"text": "▶️ Maç Özeti & Golleri İzle", "url": highlights_url}])
-    elif notification_type in ("STARTING_SOON", "UPCOMING", "DAY_BEFORE", "MATCHDAY"):
-        keyboard_buttons.append([{"text": "📺 Maç Detayı & Kanallar", "url": match["url"]}])
+        _, outcome = parse_score_outcome(final_score, match.get("home", ""), match.get("away", ""))
+        if outcome == "WIN":
+            btn_text = "▶️ Maç Özeti & Golleri İzle"
+        elif outcome == "DRAW":
+            btn_text = "▶️ Maç Özeti & Pozisyonlar"
+        elif outcome == "LOSS":
+            btn_text = "▶️ Maç Özeti"
+        else:
+            btn_text = "▶️ Maç Özeti & Golleri İzle"
+        keyboard_buttons.append([{"text": btn_text, "url": highlights_url}])
+    elif notification_type == "STARTING_SOON":
+        keyboard_buttons.append([{"text": "📊 Canlı Maç Merkezi", "url": match.get("url", "https://www.sporekrani.com")}])
+    elif notification_type in ("UPCOMING", "DAY_BEFORE", "MATCHDAY"):
+        keyboard_buttons.append([{"text": "📺 Maç & Yayın Rehberi", "url": match.get("url", "https://www.sporekrani.com")}])
 
     reply_markup = {"inline_keyboard": keyboard_buttons} if keyboard_buttons else None
 
