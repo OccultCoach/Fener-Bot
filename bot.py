@@ -960,7 +960,7 @@ def get_highlights_url(match):
     return f"https://www.youtube.com/results?search_query={encoded_query}&sp=EgIIAg%253D%253D"
 
 
-TURKISH_MONTHS = ["", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+TURKISH_MONTH_NAMES = ["", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
 TURKISH_DAYS = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
 
 PLAYER_NAME_REPLACEMENTS = {
@@ -1033,7 +1033,7 @@ def clean_team_name(name):
 def format_turkish_date(dt_str):
     try:
         d = date.fromisoformat(dt_str)
-        return f"{d.day} {TURKISH_MONTHS[d.month]} {TURKISH_DAYS[d.weekday()]}"
+        return f"{d.day} {TURKISH_MONTH_NAMES[d.month]} {TURKISH_DAYS[d.weekday()]}"
     except Exception:
         return dt_str
 
