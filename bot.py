@@ -975,9 +975,14 @@ PLAYER_NAME_REPLACEMENTS = {
     "mert gunok": "Mert Günok",
     "mert muldur": "Mert Müldür",
     "yigit efe demir": "Yiğit Efe Demir",
+    "yigit demir": "Yiğit Efe Demir",
     "bartug elmaz": "Bartuğ Elmaz",
     "ismail yuksek": "İsmail Yüksek",
     "mert hakan yandas": "Mert Hakan Yandaş",
+    "mert yandas": "Mert Hakan Yandaş",
+    "tarik cetin": "Tarık Çetin",
+    "nene dorgeles": "Dorgeles Nene",
+    "dorgeles nene": "Dorgeles Nene",
     "caglar soyuncu": "Çağlar Söyüncü",
     "cenk tosun": "Cenk Tosun",
     "cengiz under": "Cengiz Ünder",
@@ -1132,16 +1137,16 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
         clean_score_title, outcome = parse_score_outcome(score, home, away)
         if outcome == "WIN":
             header = "🏁 <b>MAÇ SONUCU | ZAFER BİZİM!</b> 🎉 🟡🔵"
-            footer = "🔥 <b>Tebrikler Fenerbahçem! Sahadan muhteşem bir zaferle ayrılıyoruz.</b> 👏\n\n<i>Karşılaşmanın özet görüntüleri ve golleri için aşağıdaki butona basınız:</i>"
+            footer = "🔥 <b>Tebrikler Fenerbahçem! Sahadan muhteşem bir zaferle ayrılıyoruz.</b> 👏"
         elif outcome == "LOSS":
             header = "🏁 <b>MAÇ SONUCU</b> 💛💙"
-            footer = "💛💙 <b>Başını dik tut Fenerbahçeli! Düştüğümüz yerden daha güçlü kalkacağız. Bu şanlı arma hiçbir zaman yalnız kalmadı, kalmayacak!</b>\n\n<i>Karşılaşmanın geniş özeti için aşağıdaki butona basınız:</i>"
+            footer = "💛💙 <b>Başını dik tut Fenerbahçeli! Düştüğümüz yerden daha güçlü kalkacağız. Bu şanlı arma hiçbir zaman yalnız kalmadı, kalmayacak!</b>"
         elif outcome == "DRAW":
             header = "🏁 <b>MAÇ SONUCU</b> 🟡🔵"
-            footer = "💛💙 <b>Mücadele beraberlikle sonuçlandı. Önümüzde uzun bir maraton var; mücadeleye ve armanın peşinde koşmaya devam!</b>\n\n<i>Karşılaşmanın özet görüntüleri için aşağıdaki butona basınız:</i>"
+            footer = "💛💙 <b>Mücadele beraberlikle sonuçlandı. Önümüzde uzun bir maraton var; mücadeleye ve armanın peşinde koşmaya devam!</b>"
         else:
             header = "🏁 <b>MAÇ SONUCU</b> 🟡🔵"
-            footer = "💛💙 <b>Karşılaşma tamamlandı! Maçın özeti ve golleri için butona basınız.</b>"
+            footer = "💛💙 <b>Karşılaşma tamamlandı.</b>"
 
         msg = (
             f"{header}\n\n"
@@ -1156,7 +1161,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             f"⚽️ <b>{home} — {away}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
             f"📅 <b>Yarın ({date_formatted})</b> | ⏰ <b>{match['time']}</b>\n"
-            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"📺 <b>{channel_text}</b>\n\n"
             f"💛💙 <i>Formanı hazırla, nefesler tutuldu!</i>"
         )
 
@@ -1165,8 +1170,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             f"☀️ <b>BUGÜN GÜNLERDEN FENERBAHÇE!</b> 🟡🔵\n\n"
             f"⚽️ <b>{home} — {away}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
-            f"⏰ <b>{match['time']}</b> | 📅 <b>Bugün</b>\n"
-            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"⏰ <b>{match['time']}</b> | 📺 <b>{channel_text}</b>\n\n"
             f"💛💙 <b>Vurduğun gol olsun, saldır şanlı Fenerbahçe!</b>"
         )
 
@@ -1176,7 +1180,7 @@ def create_message(match, notification_type="UPCOMING", lineup=None, score=None,
             f"⚽️ <b>{home} — {away}</b>\n"
             f"🏆 <i>{match['competition']}</i>\n"
             f"📅 <b>{date_formatted}</b> | ⏰ <b>{match['time']}</b>\n"
-            f"📺 <b>Kanal:</b> {channel_text}\n\n"
+            f"📺 <b>{channel_text}</b>\n\n"
             f"💛💙 <i>Armanın peşinde, adım adım zafere!</i>"
         )
 
